@@ -382,16 +382,3 @@ public class Function
         return "Unknown";
     }
 }
-
-/// <summary>
-/// Internal class to represent queue messages
-/// </summary>
-internal class QueueMessage
-{
-    public string MessageId { get; set; } = string.Empty;
-    public string Body { get; set; } = string.Empty;
-    public string ReceiptHandle { get; set; } = string.Empty;
-    public string MessageGroupId { get; set; } = string.Empty;
-    public Dictionary<string, string>? Attributes { get; set; }
-    public Dictionary<string, MessageAttributeValue>? MessageAttributes { get; set; }
-}
