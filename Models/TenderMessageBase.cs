@@ -4,6 +4,7 @@ using System.Linq;
 using System.Text;
 using System.Text.Json.Serialization;
 using System.Threading.Tasks;
+using Sqs_AI_Lambda.Converters;
 
 namespace Sqs_AI_Lambda.Models
 {
@@ -16,6 +17,7 @@ namespace Sqs_AI_Lambda.Models
         public string Description { get; set; } = string.Empty;
 
         [JsonPropertyName("tenderNumber")]
+        [JsonConverter(typeof(StringOrNumberConverter))]
         public string TenderNumber { get; set; } = string.Empty;
 
         [JsonPropertyName("reference")]
