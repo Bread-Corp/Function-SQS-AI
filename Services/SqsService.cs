@@ -103,5 +103,61 @@ namespace Sqs_AI_Lambda.Services
                 throw;
             }
         }
+
+        public async Task DeleteMessageAsync(string queueUrl, string receiptHandle)
+        {
+            try
+            {
+                var request = new DeleteMessageRequest
+                {
+                    QueueUrl = queueUrl,
+                    ReceiptHandle = receiptHandle
+                };
+
+                await _sqsClient.DeleteMessageAsync(request);
+                _logger.LogInformation("Message deleted successfully from {QueueUrl}", queueUrl);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Failed to delete message from {QueueUrl}", queueUrl);
+                throw;
+            }
+        }
+
+        public async Task DeleteMessageBatchAsync(string queueUrl, List<(string id, string receiptHandle)> messages)
+        {
+            if (!messages.Any()) return;
+
+            try
+            {
+                const int batchSize = 10;
+
+                for (int i = 0; i < messages.Count; i += batchSize)
+                {
+                    var batch = messages.Skip(i).Take(batchSize).ToList();
+
+                    var entries = batch.Select(m => new DeleteMessageBatchRequestEntry
+                    {
+                        Id = m.id,
+                        ReceiptHandle = m.receiptHandle
+                    }).ToList();
+
+                    var request = new DeleteMessageBatchRequest
+                    {
+                        QueueUrl = queueUrl,
+                        Entries = entries
+                    };
+
+                    var response = await _sqsClient.DeleteMessageBatchAsync(request);
+                    _logger.LogInformation("Batch delete completed for {QueueUrl}. Successful: {SuccessCount}, Failed: {FailCount}",
+                        queueUrl, response.Successful.Count, response.Failed.Count);
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Failed to delete message batch from {QueueUrl}", queueUrl);
+                throw;
+            }
+        }
     }
 }
