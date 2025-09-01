@@ -36,7 +36,7 @@ namespace Sqs_AI_Lambda.Services
                     "etenderscrape" or "etenderlambda" =>
                         JsonSerializer.Deserialize<ETenderMessage>(messageBody, _jsonOptions),
 
-                    "eskomtenderscrape" or "eskomlambda" =>
+                    "eskomtenderscrape" or "eskomlambda"  =>
                         JsonSerializer.Deserialize<EskomTenderMessage>(messageBody, _jsonOptions),
 
                     _ => throw new NotSupportedException($"Unsupported MessageGroupId: {messageGroupId}")
