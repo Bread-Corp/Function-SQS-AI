@@ -10,5 +10,7 @@ namespace Sqs_AI_Lambda.Interfaces
     {
         Task SendMessageAsync(string queueUrl, object message);
         Task SendMessageBatchAsync(string queueUrl, List<object> messages);
+        Task DeleteMessageAsync(string queueUrl, string receiptHandle);
+        Task DeleteMessageBatchAsync(string queueUrl, List<(string id, string receiptHandle)> messages);
     }
 }
