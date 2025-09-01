@@ -14,6 +14,9 @@ using System.Text.Json;
 
 namespace Sqs_AI_Lambda;
 
+/// <summary>
+/// AWS Lambda function for processing tender messages from SQS with continuous queue polling
+/// </summary>
 public class Function
 {
     private readonly ISqsService _sqsService;
@@ -23,69 +26,75 @@ public class Function
     private readonly IAmazonSQS _sqsClient;
     private readonly JsonSerializerOptions _jsonOptions;
 
-    // Queue URLs - configured via environment variables
+    // Queue URLs configured via environment variables for deployment flexibility
     private readonly string _writeQueueUrl;
     private readonly string _failedQueueUrl;
     private readonly string _sourceQueueUrl;
 
     /// <summary>
-    /// Default constructor. This constructor is used by Lambda to construct the instance. When invoked in a Lambda environment
-    /// the AWS credentials will come from the IAM role associated with the function and the AWS region will be set to the
-    /// region the Lambda function is executed in.
+    /// Default constructor used by AWS Lambda runtime with automatic dependency injection setup
     /// </summary>
     public Function() : this(null, null, null, null, null) { }
 
     /// <summary>
-    /// Constructor for dependency injection (used for testing)
+    /// Constructor with dependency injection support for testing and custom service configuration
     /// </summary>
     public Function(ISqsService? sqsService, IMessageProcessor? messageProcessor, IMessageFactory? messageFactory, ILogger<Function>? logger, IAmazonSQS? sqsClient)
     {
+        // Configure dependency injection container for production services
         var serviceProvider = ConfigureServices();
 
+        // Initialize services with injected dependencies or defaults from service provider
         _sqsService = sqsService ?? serviceProvider.GetRequiredService<ISqsService>();
         _messageProcessor = messageProcessor ?? serviceProvider.GetRequiredService<IMessageProcessor>();
         _messageFactory = messageFactory ?? serviceProvider.GetRequiredService<IMessageFactory>();
         _logger = logger ?? serviceProvider.GetRequiredService<ILogger<Function>>();
         _sqsClient = sqsClient ?? serviceProvider.GetRequiredService<IAmazonSQS>();
 
+        // Configure JSON serialization for consistent message handling
         _jsonOptions = new JsonSerializerOptions
         {
             PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
             PropertyNameCaseInsensitive = true
         };
 
-        // Log environment variables for debugging
-        _logger.LogInformation("Environment variable debug - WRITE_QUEUE_URL: {WriteQueueUrl}", Environment.GetEnvironmentVariable("WRITE_QUEUE_URL") ?? "NOT SET");
-        _logger.LogInformation("Environment variable debug - FAILED_QUEUE_URL: {FailedQueueUrl}", Environment.GetEnvironmentVariable("FAILED_QUEUE_URL") ?? "NOT SET");
-        _logger.LogInformation("Environment variable debug - SOURCE_QUEUE_URL: {SourceQueueUrl}", Environment.GetEnvironmentVariable("SOURCE_QUEUE_URL") ?? "NOT SET");
+        // Load and validate required environment variables for queue configuration
+        var writeQueueEnv = Environment.GetEnvironmentVariable("WRITE_QUEUE_URL");
+        var failedQueueEnv = Environment.GetEnvironmentVariable("FAILED_QUEUE_URL");
+        var sourceQueueEnv = Environment.GetEnvironmentVariable("SOURCE_QUEUE_URL");
 
-        // Configure queue URLs from environment variables
-        _writeQueueUrl = Environment.GetEnvironmentVariable("WRITE_QUEUE_URL") ??
-            throw new InvalidOperationException("WRITE_QUEUE_URL environment variable is required");
-        _failedQueueUrl = Environment.GetEnvironmentVariable("FAILED_QUEUE_URL") ??
-            throw new InvalidOperationException("FAILED_QUEUE_URL environment variable is required");
-        _sourceQueueUrl = Environment.GetEnvironmentVariable("SOURCE_QUEUE_URL") ??
-            throw new InvalidOperationException("SOURCE_QUEUE_URL environment variable is required");
+        _logger.LogInformation("Initializing Lambda function - WriteQueue: {WriteQueueSet}, FailedQueue: {FailedQueueSet}, SourceQueue: {SourceQueueSet}",
+            !string.IsNullOrEmpty(writeQueueEnv), !string.IsNullOrEmpty(failedQueueEnv), !string.IsNullOrEmpty(sourceQueueEnv));
 
-        _logger.LogInformation("Successfully configured queue URLs - WriteQueue: {WriteQueueUrl}, FailedQueue: {FailedQueueUrl}, SourceQueue: {SourceQueueUrl}", 
-            _writeQueueUrl, _failedQueueUrl, _sourceQueueUrl);
+        // Validate and assign required queue URLs with descriptive error messages
+        _writeQueueUrl = writeQueueEnv ??
+            throw new InvalidOperationException("WRITE_QUEUE_URL environment variable is required for processed message output");
+        _failedQueueUrl = failedQueueEnv ??
+            throw new InvalidOperationException("FAILED_QUEUE_URL environment variable is required for error handling");
+        _sourceQueueUrl = sourceQueueEnv ??
+            throw new InvalidOperationException("SOURCE_QUEUE_URL environment variable is required for message input");
+
+        _logger.LogInformation("Lambda function initialized successfully - Queues configured: Write, Failed, Source");
     }
 
+    /// <summary>
+    /// Configures dependency injection container with all required services for production use
+    /// </summary>
     private static ServiceProvider ConfigureServices()
     {
         var services = new ServiceCollection();
 
-        // Add logging
+        // Configure structured logging for CloudWatch integration
         services.AddLogging(builder =>
         {
             builder.AddConsole();
             builder.SetMinimumLevel(Microsoft.Extensions.Logging.LogLevel.Information);
         });
 
-        // Add AWS SQS client directly (without extensions)
+        // Register AWS SQS client with default configuration for Lambda environment
         services.AddSingleton<IAmazonSQS>(provider => new AmazonSQSClient());
 
-        // Add application services
+        // Register application services as transient for per-invocation isolation
         services.AddTransient<ISqsService, SqsService>();
         services.AddTransient<IMessageProcessor, MessageProcessor>();
         services.AddTransient<IMessageFactory, MessageFactory>();
@@ -94,89 +103,112 @@ public class Function
     }
 
     /// <summary>
-    /// This method is called for every Lambda invocation. This method takes in an SQS event object and can be used 
-    /// to respond to SQS messages. Processes ALL messages in the queue continuously in batches of 10.
+    /// Main Lambda entry point that processes SQS events and continues polling until queue is empty
+    /// Implements continuous processing strategy to maximize message throughput per invocation
     /// </summary>
-    /// <param name="evnt">The event for the Lambda function handler to process.</param>
-    /// <param name="context">The ILambdaContext that provides methods for logging and describing the Lambda environment.</param>
-    /// <returns>Processing summary string</returns>
     public async Task<string> FunctionHandler(SQSEvent evnt, ILambdaContext context)
     {
-        _logger.LogInformation("Starting continuous processing of all messages in queue");
-
+        var functionStart = DateTime.UtcNow;
         var totalProcessed = 0;
         var totalFailed = 0;
         var totalDeleted = 0;
         var batchCount = 0;
 
+        _logger.LogInformation("Lambda invocation started - InitialEventMessages: {InitialMessageCount}, RemainingTime: {RemainingTimeMs}ms",
+            evnt.Records.Count, context.RemainingTime.TotalMilliseconds);
+
         try
         {
-            // Process the initial event messages first
+            // Process initial event messages first if any were provided in the SQS event
             if (evnt.Records.Any())
             {
-                _logger.LogInformation("Processing initial event with {MessageCount} messages", evnt.Records.Count);
-                var initialResult = await ProcessMessageBatch(evnt.Records.Select(ConvertSqsEventToMessage).ToList());
+                _logger.LogInformation("Processing initial SQS event batch - MessageCount: {MessageCount}", evnt.Records.Count);
+
+                // Convert SQS event records to internal message format
+                var initialMessages = evnt.Records.Select(ConvertSqsEventToMessage).ToList();
+                var initialResult = await ProcessMessageBatch(initialMessages);
+
                 totalProcessed += initialResult.processed;
                 totalFailed += initialResult.failed;
                 totalDeleted += initialResult.deleted;
                 batchCount++;
+
+                _logger.LogInformation("Initial batch completed - Processed: {Processed}, Failed: {Failed}, Deleted: {Deleted}",
+                    initialResult.processed, initialResult.failed, initialResult.deleted);
             }
 
-            // Continue polling for more messages until queue is empty
-            while (context.RemainingTime > TimeSpan.FromSeconds(30)) // Leave 30 seconds buffer for cleanup
+            // Continue polling for additional messages until time limit or queue empty
+            while (context.RemainingTime > TimeSpan.FromSeconds(30)) // Reserve 30 seconds for clean up and response
             {
-                var messages = await PollMessagesFromQueue(10);
+                // Poll for more messages from the source queue
+                var messages = await PollMessagesFromQueue(10); // AWS SQS batch limit
 
                 if (!messages.Any())
                 {
-                    _logger.LogInformation("No more messages in queue. Processing complete.");
+                    _logger.LogInformation("Queue polling completed - No additional messages found");
                     break;
                 }
 
-                _logger.LogInformation("Batch {BatchNumber}: Processing {MessageCount} messages from continuous poll",
-                    batchCount + 1, messages.Count);
+                batchCount++;
+                _logger.LogInformation("Continuous polling batch {BatchNumber} - MessageCount: {MessageCount}, RemainingTime: {RemainingTimeMs}ms",
+                    batchCount, messages.Count, context.RemainingTime.TotalMilliseconds);
 
+                // Process the polled messages using the same batch processing logic
                 var batchResult = await ProcessMessageBatch(messages);
                 totalProcessed += batchResult.processed;
                 totalFailed += batchResult.failed;
                 totalDeleted += batchResult.deleted;
-                batchCount++;
 
-                // Small delay to prevent aggressive polling
+                _logger.LogInformation("Batch {BatchNumber} completed - Processed: {Processed}, Failed: {Failed}, Deleted: {Deleted}",
+                    batchCount, batchResult.processed, batchResult.failed, batchResult.deleted);
+
+                // Brief delay to prevent aggressive polling and allow other processes
                 await Task.Delay(100);
             }
+
+            var totalDuration = (DateTime.UtcNow - functionStart).TotalMilliseconds;
+            var result = $"Batches: {batchCount}, Processed: {totalProcessed}, Failed: {totalFailed}, Deleted: {totalDeleted}, Duration: {totalDuration:F0}ms";
+
+            _logger.LogInformation("Lambda execution completed successfully - {ExecutionSummary}", result);
+            return result;
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Error during continuous processing");
+            var errorDuration = (DateTime.UtcNow - functionStart).TotalMilliseconds;
+            _logger.LogError(ex, "Lambda execution failed - Duration: {Duration}ms, BatchesCompleted: {BatchCount}, TotalProcessed: {TotalProcessed}",
+                errorDuration, batchCount, totalProcessed);
             throw;
         }
-
-        var result = $"Batches: {batchCount}, Total Processed: {totalProcessed}, Total Failed: {totalFailed}, Total Deleted: {totalDeleted}";
-        _logger.LogInformation("Continuous processing completed. {Result}", result);
-        return result;
     }
 
     /// <summary>
-    /// Polls messages directly from the SQS queue
+    /// Polls messages directly from the configured source SQS queue using short polling
     /// </summary>
     private async Task<List<QueueMessage>> PollMessagesFromQueue(int maxMessages)
     {
         try
         {
+            _logger.LogDebug("Polling messages from source queue - MaxMessages: {MaxMessages}, QueueUrl: {QueueUrl}",
+                maxMessages, _sourceQueueUrl);
+
+            // Configure receive message request with optimized settings
             var request = new ReceiveMessageRequest
             {
                 QueueUrl = _sourceQueueUrl,
-                MaxNumberOfMessages = maxMessages,
-                WaitTimeSeconds = 2, // Short polling
-                VisibilityTimeout = 300, // 5 minutes
-                MessageSystemAttributeNames = new List<string> { "All" },
-                MessageAttributeNames = new List<string> { "All" }
+                MaxNumberOfMessages = maxMessages,           // Batch size for efficiency
+                WaitTimeSeconds = 2,                         // Short polling for responsiveness
+                VisibilityTimeout = 300,                     // 5 minutes processing window
+                MessageSystemAttributeNames = new List<string> { "All" },  // Get all system metadata
+                MessageAttributeNames = new List<string> { "All" }         // Get all custom attributes
             };
 
             var response = await _sqsClient.ReceiveMessageAsync(request);
+            var messageCount = response.Messages?.Count ?? 0;
 
-            return response.Messages.Select(msg => new QueueMessage
+            _logger.LogDebug("Queue polling completed - ReceivedMessages: {MessageCount}", messageCount);
+
+            // Convert AWS SQS messages to internal queue message format
+            return response.Messages?.Select(msg => new QueueMessage
             {
                 MessageId = msg.MessageId,
                 Body = msg.Body,
@@ -184,69 +216,88 @@ public class Function
                 MessageGroupId = GetMessageGroupIdFromSqsMessage(msg),
                 Attributes = msg.Attributes,
                 MessageAttributes = msg.MessageAttributes
-            }).ToList();
+            }).ToList() ?? new List<QueueMessage>();
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Failed to poll messages from queue");
-            return new List<QueueMessage>();
+            _logger.LogError(ex, "Failed to poll messages from source queue - QueueUrl: {QueueUrl}", _sourceQueueUrl);
+            return new List<QueueMessage>(); // Return empty list to continue processing
         }
     }
 
     /// <summary>
-    /// Processes a batch of messages
+    /// Processes a batch of messages through the complete pipeline: parse, process, route, and cleanup
+    /// Implements transactional processing pattern to ensure data consistency
     /// </summary>
     private async Task<(int processed, int failed, int deleted)> ProcessMessageBatch(List<QueueMessage> messages)
     {
+        var batchStart = DateTime.UtcNow;
         var processedMessages = new List<(TenderMessageBase message, QueueMessage record)>();
         var failedMessages = new List<(string originalMessage, string messageGroupId, Exception exception, QueueMessage record)>();
 
-        // Phase 1: Process all messages
+        _logger.LogInformation("Starting batch processing - MessageCount: {MessageCount}", messages.Count);
+
+        // Phase 1: Parse and process all messages in the batch
         foreach (var message in messages)
         {
             try
             {
-                _logger.LogInformation("Processing message {MessageId} with MessageGroupId: {MessageGroupId}",
-                    message.MessageId, message.MessageGroupId);
+                _logger.LogDebug("Processing individual message - MessageId: {MessageId}, GroupId: {MessageGroupId}, BodyLength: {BodyLength}",
+                    message.MessageId, message.MessageGroupId, message.Body?.Length ?? 0);
 
-                // Create the appropriate message type based on MessageGroupId
+                // Validate message body is not null before processing
+                if (string.IsNullOrEmpty(message.Body))
+                {
+                    throw new InvalidOperationException($"Message body is null or empty for MessageId: {message.MessageId}");
+                }
+
+                // Create typed message object from JSON body using factory pattern
                 var tenderMessage = _messageFactory.CreateMessage(message.Body, message.MessageGroupId);
 
                 if (tenderMessage == null)
                 {
-                    throw new InvalidOperationException($"Failed to create message for MessageGroupId: {message.MessageGroupId}");
+                    throw new InvalidOperationException($"Message factory returned null for GroupId: {message.MessageGroupId}");
                 }
 
-                // Process the message
+                // Process the message through business logic pipeline
                 var processedMessage = await _messageProcessor.ProcessMessageAsync(tenderMessage);
                 processedMessages.Add((processedMessage, message));
 
-                _logger.LogInformation("Successfully processed message {MessageId} of type {MessageType}",
-                    message.MessageId, processedMessage.GetSourceType());
+                _logger.LogDebug("Message processed successfully - MessageId: {MessageId}, MessageType: {MessageType}, Source: {SourceType}",
+                    message.MessageId, processedMessage.GetType().Name, processedMessage.GetSourceType());
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Failed to process message {MessageId} with MessageGroupId: {MessageGroupId}",
-                    message.MessageId, message.MessageGroupId);
-                failedMessages.Add((message.Body, message.MessageGroupId, ex, message));
+                _logger.LogWarning(ex, "Message processing failed - MessageId: {MessageId}, GroupId: {MessageGroupId}, Error: {ErrorType}",
+                    message.MessageId, message.MessageGroupId, ex.GetType().Name);
+
+                // Collect failed messages for DLQ routing
+                failedMessages.Add((message.Body ?? string.Empty, message.MessageGroupId, ex, message));
             }
         }
 
-        // Phase 2: Send processed messages to WriteQueue
+        // Phase 2: Send successfully processed messages to write queue
         var successfullySentToWriteQueue = new List<(TenderMessageBase message, QueueMessage record)>();
 
         if (processedMessages.Any())
         {
             try
             {
-                await _sqsService.SendMessageBatchAsync(_writeQueueUrl, processedMessages.Select(pm => pm.message).Cast<object>().ToList());
-                _logger.LogInformation("Sent {Count} processed messages to WriteQueue", processedMessages.Count);
+                _logger.LogDebug("Sending processed messages to write queue - Count: {Count}, QueueUrl: {WriteQueueUrl}",
+                    processedMessages.Count, _writeQueueUrl);
+
+                // Convert to object list for SQS service batch operation
+                var messagesToSend = processedMessages.Select(pm => pm.message).Cast<object>().ToList();
+                await _sqsService.SendMessageBatchAsync(_writeQueueUrl, messagesToSend);
+
                 successfullySentToWriteQueue.AddRange(processedMessages);
+                _logger.LogInformation("Successfully sent to write queue - Count: {Count}", processedMessages.Count);
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Failed to send processed messages to WriteQueue");
-                // Move these to failed messages for DLQ processing
+                _logger.LogError(ex, "Failed to send processed messages to write queue - Count: {Count}", processedMessages.Count);
+
+                // Move failed sends to DLQ processing
                 foreach (var (message, record) in processedMessages)
                 {
                     failedMessages.Add((JsonSerializer.Serialize(message, _jsonOptions), message.GetSourceType(), ex, record));
@@ -254,11 +305,15 @@ public class Function
             }
         }
 
-        // Phase 3: Send failed messages to FailedQueue
+        // Phase 3: Send failed messages to dead letter queue with error metadata
         if (failedMessages.Any())
         {
             try
             {
+                _logger.LogDebug("Sending failed messages to DLQ - Count: {Count}, QueueUrl: {FailedQueueUrl}",
+                    failedMessages.Count, _failedQueueUrl);
+
+                // Create enriched error messages with processing metadata
                 var dlqMessages = failedMessages.Select(f => new
                 {
                     OriginalMessage = f.originalMessage,
@@ -267,57 +322,65 @@ public class Function
                     ErrorType = f.exception.GetType().Name,
                     ProcessingTime = DateTime.UtcNow,
                     StackTrace = f.exception.StackTrace,
-                    ProcessedBy = "AI_Lambda",
-                    ProcessedAt = DateTime.UtcNow
+                    ProcessedBy = "Sqs_AI_Lambda",
+                    ProcessedAt = DateTime.UtcNow.ToString("yyyy-MM-dd HH:mm:ss")
                 }).Cast<object>().ToList();
 
                 await _sqsService.SendMessageBatchAsync(_failedQueueUrl, dlqMessages);
-                _logger.LogInformation("Sent {Count} failed messages to FailedQueue", failedMessages.Count);
+                _logger.LogInformation("Successfully sent to DLQ - Count: {Count}", failedMessages.Count);
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Failed to send failed messages to FailedQueue");
-                throw; // Re-throw to trigger Lambda retry mechanism
+                _logger.LogError(ex, "Critical: Failed to send messages to DLQ - Count: {Count}", failedMessages.Count);
+                throw; // Re-throw to trigger Lambda retry mechanism and prevent message loss
             }
         }
 
-        // Phase 4: Delete successfully processed messages from source queue
+        // Phase 4: Clean up successfully processed messages from source queue
         var deletedCount = 0;
         if (successfullySentToWriteQueue.Any())
         {
             try
             {
+                _logger.LogDebug("Deleting processed messages from source queue - Count: {Count}", successfullySentToWriteQueue.Count);
+
+                // Prepare batch delete request with message IDs and receipt handles
                 var messagesToDelete = successfullySentToWriteQueue
                     .Select(pm => (pm.record.MessageId, pm.record.ReceiptHandle))
                     .ToList();
 
                 await _sqsService.DeleteMessageBatchAsync(_sourceQueueUrl, messagesToDelete);
                 deletedCount = messagesToDelete.Count;
-                _logger.LogInformation("Deleted {Count} successfully processed messages from source queue", deletedCount);
+
+                _logger.LogInformation("Successfully deleted from source queue - Count: {Count}", deletedCount);
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Failed to delete {Count} messages from source queue. Messages may be reprocessed.",
+                _logger.LogError(ex, "Failed to delete processed messages from source queue - Count: {Count}, Impact: Messages may be reprocessed",
                     successfullySentToWriteQueue.Count);
 
-                // Log individual message details for troubleshooting
+                // Log individual message details for operational troubleshooting
                 foreach (var (message, record) in successfullySentToWriteQueue)
                 {
-                    _logger.LogWarning("Message {MessageId} with ReceiptHandle {ReceiptHandle} could not be deleted",
-                        record.MessageId, record.ReceiptHandle);
+                    _logger.LogWarning("Delete failed for MessageId: {MessageId}, ReceiptHandle: {ReceiptHandle}, TenderNumber: {TenderNumber}",
+                        record.MessageId, record.ReceiptHandle, message.TenderNumber ?? "Unknown");
                 }
             }
         }
+
+        var batchDuration = (DateTime.UtcNow - batchStart).TotalMilliseconds;
+        _logger.LogInformation("Batch processing completed - Processed: {Processed}, Failed: {Failed}, Deleted: {Deleted}, Duration: {Duration}ms",
+            successfullySentToWriteQueue.Count, failedMessages.Count, deletedCount, batchDuration);
 
         return (successfullySentToWriteQueue.Count, failedMessages.Count, deletedCount);
     }
 
     /// <summary>
-    /// Converts SQS Event record to QueueMessage
+    /// Converts SQS Event record to internal QueueMessage format for consistent processing
     /// </summary>
     private QueueMessage ConvertSqsEventToMessage(SQSEvent.SQSMessage record)
     {
-        // Convert SQSEvent.MessageAttribute to MessageAttributeValue
+        // Convert SQS event message attributes to internal format
         Dictionary<string, MessageAttributeValue>? convertedMessageAttributes = null;
         if (record.MessageAttributes != null)
         {
@@ -331,6 +394,7 @@ public class Function
                 });
         }
 
+        // Create internal message representation with all required fields
         return new QueueMessage
         {
             MessageId = record.MessageId,
@@ -343,42 +407,44 @@ public class Function
     }
 
     /// <summary>
-    /// Extracts MessageGroupId from SQS event message attributes
+    /// Extracts MessageGroupId from SQS event message using multiple fallback strategies
     /// </summary>
     private static string GetMessageGroupId(SQSEvent.SQSMessage record)
     {
-        // Try to get MessageGroupId from attributes
-        if (record.Attributes?.TryGetValue("MessageGroupId", out var groupId) == true)
+        // Primary: Check system attributes for FIFO queue MessageGroupId
+        if (record.Attributes?.TryGetValue("MessageGroupId", out var groupId) == true && !string.IsNullOrEmpty(groupId))
         {
             return groupId;
         }
 
-        // Fall back: try to get from message attributes
-        if (record.MessageAttributes?.TryGetValue("MessageGroupId", out var msgAttr) == true)
+        // Fall back: Check custom message attributes
+        if (record.MessageAttributes?.TryGetValue("MessageGroupId", out var msgAttr) == true && !string.IsNullOrEmpty(msgAttr.StringValue))
         {
-            return msgAttr.StringValue ?? "Unknown";
+            return msgAttr.StringValue;
         }
 
+        // Default fall back for messages without group ID
         return "Unknown";
     }
 
     /// <summary>
-    /// Extracts MessageGroupId from direct SQS message
+    /// Extracts MessageGroupId from direct SQS message using multiple fall back strategies
     /// </summary>
     private static string GetMessageGroupIdFromSqsMessage(Message message)
     {
-        // Try to get MessageGroupId from attributes
-        if (message.Attributes?.TryGetValue("MessageGroupId", out var groupId) == true)
+        // Primary: Check system attributes for FIFO queue MessageGroupId
+        if (message.Attributes?.TryGetValue("MessageGroupId", out var groupId) == true && !string.IsNullOrEmpty(groupId))
         {
             return groupId;
         }
 
-        // Fall back: try to get from message attributes
-        if (message.MessageAttributes?.TryGetValue("MessageGroupId", out var msgAttr) == true)
+        // Fall back: Check custom message attributes
+        if (message.MessageAttributes?.TryGetValue("MessageGroupId", out var msgAttr) == true && !string.IsNullOrEmpty(msgAttr.StringValue))
         {
-            return msgAttr.StringValue ?? "Unknown";
+            return msgAttr.StringValue;
         }
 
+        // Default fall back for messages without group ID
         return "Unknown";
     }
 }
