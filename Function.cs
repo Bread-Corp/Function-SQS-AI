@@ -54,6 +54,11 @@ public class Function
             PropertyNameCaseInsensitive = true
         };
 
+        // Log environment variables for debugging
+        _logger.LogInformation("Environment variable debug - WRITE_QUEUE_URL: {WriteQueueUrl}", Environment.GetEnvironmentVariable("WRITE_QUEUE_URL") ?? "NOT SET");
+        _logger.LogInformation("Environment variable debug - FAILED_QUEUE_URL: {FailedQueueUrl}", Environment.GetEnvironmentVariable("FAILED_QUEUE_URL") ?? "NOT SET");
+        _logger.LogInformation("Environment variable debug - SOURCE_QUEUE_URL: {SourceQueueUrl}", Environment.GetEnvironmentVariable("SOURCE_QUEUE_URL") ?? "NOT SET");
+
         // Configure queue URLs from environment variables
         _writeQueueUrl = Environment.GetEnvironmentVariable("WRITE_QUEUE_URL") ??
             throw new InvalidOperationException("WRITE_QUEUE_URL environment variable is required");
@@ -61,6 +66,9 @@ public class Function
             throw new InvalidOperationException("FAILED_QUEUE_URL environment variable is required");
         _sourceQueueUrl = Environment.GetEnvironmentVariable("SOURCE_QUEUE_URL") ??
             throw new InvalidOperationException("SOURCE_QUEUE_URL environment variable is required");
+
+        _logger.LogInformation("Successfully configured queue URLs - WriteQueue: {WriteQueueUrl}, FailedQueue: {FailedQueueUrl}, SourceQueue: {SourceQueueUrl}", 
+            _writeQueueUrl, _failedQueueUrl, _sourceQueueUrl);
     }
 
     private static ServiceProvider ConfigureServices()
