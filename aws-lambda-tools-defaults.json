@@ -11,5 +11,9 @@
   "function-runtime": "dotnet8",
   "function-memory-size": 512,
   "function-timeout": 30,
-  "function-handler": "Sqs_AI_Lambda::Sqs_AI_Lambda.Function::FunctionHandler"
+    "function-handler": "Sqs_AI_Lambda::Sqs_AI_Lambda.Function::FunctionHandler",
+    "environment-variables": {
+        "WRITE_QUEUE_URL": "https://sqs.us-east-1.amazonaws.com/211635102441/WriteQueue.fifo",
+        "FAILED_QUEUE_URL": "https://sqs.us-east-1.amazonaws.com/211635102441/FailedQueue.fifo"
+    }
 }
