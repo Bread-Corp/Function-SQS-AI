@@ -111,12 +111,22 @@ namespace Sqs_AI_Lambda.Services
                     // Send the batch
                     var response = await _sqsClient.SendMessageBatchAsync(request);
 
+                    // Check if response is null (defensive programming)
+                    if (response == null)
+                    {
+                        throw new InvalidOperationException("SQS SendMessageBatchAsync returned null response");
+                    }
+
+                    // Safely access response properties with null checks
+                    var successfulCount = response.Successful?.Count ?? 0;
+                    var failedCount = response.Failed?.Count ?? 0;
+
                     // Log the results
                     _logger.LogInformation("Batch sent successfully to {QueueUrl}. Successful: {SuccessCount}, Failed: {FailCount}",
-                        queueUrl, response.Successful.Count, response.Failed.Count);
+                        queueUrl, successfulCount, failedCount);
 
                     // Log any failed messages
-                    if (response.Failed.Any())
+                    if (response.Failed != null && response.Failed.Any())
                     {
                         foreach (var failed in response.Failed)
                         {
@@ -179,11 +189,22 @@ namespace Sqs_AI_Lambda.Services
                     };
 
                     var response = await _sqsClient.DeleteMessageBatchAsync(request);
+                    
+                    // Check if response is null (defensive programming)
+                    if (response == null)
+                    {
+                        throw new InvalidOperationException("SQS DeleteMessageBatchAsync returned null response");
+                    }
+
+                    // Safely access response properties with null checks
+                    var successfulCount = response.Successful?.Count ?? 0;
+                    var failedCount = response.Failed?.Count ?? 0;
+
                     _logger.LogInformation("Batch delete completed for {QueueUrl}. Successful: {SuccessCount}, Failed: {FailCount}",
-                        queueUrl, response.Successful.Count, response.Failed.Count);
+                        queueUrl, successfulCount, failedCount);
 
                     // Log any failed deletions
-                    if (response.Failed.Any())
+                    if (response.Failed != null && response.Failed.Any())
                     {
                         foreach (var failed in response.Failed)
                         {
@@ -207,6 +228,19 @@ namespace Sqs_AI_Lambda.Services
         {
             try
             {
+                // Add null check for message parameter
+                if (message == null)
+                {
+                    _logger.LogWarning("Message object is null, using default 'NullMessage' MessageGroupId");
+                    return "NullMessage";
+                }
+
+                if (string.IsNullOrEmpty(messageBody))
+                {
+                    _logger.LogWarning("Message body is null or empty, using default 'EmptyMessage' MessageGroupId");
+                    return "EmptyMessage";
+                }
+
                 _logger.LogDebug("Extracting MessageGroupId from message of type: {MessageType}", message.GetType().Name);
 
                 // Strategy 1: Try to extract MessageGroupId from the message object if it has a GetSourceType method
@@ -281,7 +315,8 @@ namespace Sqs_AI_Lambda.Services
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Error extracting MessageGroupId from message, using default 'DefaultGroup'");
+                _logger.LogError(ex, "Error extracting MessageGroupId from message, using default 'DefaultGroup'. Message type: {MessageType}", 
+                    message?.GetType().Name ?? "NULL");
                 return "DefaultGroup";
             }
         }
