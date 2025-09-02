@@ -135,6 +135,16 @@ namespace Sqs_AI_Lambda.Models
         public List<string> Tags { get; set; } = new();
 
         /// <summary>
+        /// Gets or sets the AI-generated summary for the tender.
+        /// This property is not populated during deserialization, but is included in serialization when pushing to the write queue.
+        /// </summary>
+        /// <value>
+        /// A string containing the summary of the tender. Defaults to null if not set.
+        /// </value>
+        [JsonPropertyName("summary")]
+        public string? Summary { get; set; }
+
+        /// <summary>
         /// Gets the source type identifier for this tender message.
         /// This abstract method must be implemented by derived classes to specify
         /// the specific type or origin of the tender message.
