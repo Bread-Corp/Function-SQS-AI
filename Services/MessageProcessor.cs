@@ -15,10 +15,12 @@ namespace Sqs_AI_Lambda.Services
     public class MessageProcessor : IMessageProcessor
     {
         private readonly ILogger<MessageProcessor> _logger;
+        private readonly IBedrockSummaryService _bedrockSummaryService;
 
-        public MessageProcessor(ILogger<MessageProcessor> logger)
+        public MessageProcessor(ILogger<MessageProcessor> logger, IBedrockSummaryService bedrockSummaryService)
         {
             _logger = logger;
+            _bedrockSummaryService = bedrockSummaryService;
         }
 
         /// <summary>
@@ -75,10 +77,6 @@ namespace Sqs_AI_Lambda.Services
                         break;
                 }
 
-                // Simulate processing time for demo purposes
-                _logger.LogTrace("Simulating processing delay for message: {TenderNumber}", tenderNumber);
-                await Task.Delay(100);
-
                 _logger.LogInformation("Message processing completed successfully - Source: {SourceType}, TenderNumber: {TenderNumber}, FinalTagCount: {TagCount}",
                     sourceType, tenderNumber, message.Tags.Count);
 
@@ -112,9 +110,19 @@ namespace Sqs_AI_Lambda.Services
                     tenderId, message.DatePublished);
             }
 
-            _logger.LogInformation("eTender processing completed - ID: {TenderId}, Status: {Status}", tenderId, status);
+            if (message.DateClosing != default)
+            {
+                _logger.LogDebug("eTender closing date - ID: {TenderId}, ClosingDate: {ClosingDate}",
+                    tenderId, message.DateClosing);
+            }
 
-            // Placeholder for future eTender-specific processing logic
+            // Generate AI summary as part of eTender processing
+            await GenerateAndAttachSummary(message, "eTender");
+
+            _logger.LogInformation("eTender processing completed - ID: {TenderId}, Status: {Status}, SummaryGenerated: {HasSummary}",
+                tenderId, status, !string.IsNullOrEmpty(message.Summary));
+
+
             await Task.CompletedTask;
         }
 
@@ -126,9 +134,10 @@ namespace Sqs_AI_Lambda.Services
             var tenderNumber = message.TenderNumber ?? "Unknown";
             var source = message.Source ?? "Unknown";
             var hasPublishedDate = message.PublishedDate.HasValue;
+            var hasClosingDate = message.ClosingDate.HasValue;
 
-            _logger.LogInformation("Processing Eskom tender - Number: {TenderNumber}, Source: {Source}, HasPublishedDate: {HasPublishedDate}",
-                tenderNumber, source, hasPublishedDate);
+            _logger.LogInformation("Processing Eskom tender - Number: {TenderNumber}, Source: {Source}, HasPublishedDate: {HasPublishedDate}, HasClosingDate: {HasClosingDate}",
+                tenderNumber, source, hasPublishedDate, hasClosingDate);
 
             // Log published date if available
             if (message.PublishedDate.HasValue)
@@ -141,9 +150,20 @@ namespace Sqs_AI_Lambda.Services
                 _logger.LogDebug("Eskom tender missing published date - Number: {TenderNumber}", tenderNumber);
             }
 
-            _logger.LogInformation("Eskom processing completed - Number: {TenderNumber}, Source: {Source}", tenderNumber, source);
+            // Log closing date if available
+            if (message.ClosingDate.HasValue)
+            {
+                _logger.LogDebug("Eskom tender closing date - Number: {TenderNumber}, ClosingDate: {ClosingDate}",
+                    tenderNumber, message.ClosingDate.Value);
+            }
 
-            // Placeholder for future Eskom-specific processing logic
+            // Generate AI summary as part of Eskom processing
+            await GenerateAndAttachSummary(message, "Eskom");
+
+            _logger.LogInformation("Eskom processing completed - Number: {TenderNumber}, Source: {Source}, SummaryGenerated: {HasSummary}",
+                tenderNumber, source, !string.IsNullOrEmpty(message.Summary));
+
+
             await Task.CompletedTask;
         }
 
@@ -154,10 +174,14 @@ namespace Sqs_AI_Lambda.Services
         {
             var tenderNumber = message.TenderNumber ?? "Unknown";
             var source = message.Source ?? "Unknown";
+            var institution = message.Institution ?? "Unknown";
+            var category = message.Category ?? "Unknown";
+            var location = message.Location ?? "Unknown";
             var hasPublishedDate = message.PublishedDate.HasValue;
+            var hasClosingDate = message.ClosingDate.HasValue;
 
-            _logger.LogInformation("Processing Transnet tender - Number: {TenderNumber}, Source: {Source}, HasPublishedDate: {HasPublishedDate}",
-                tenderNumber, source, hasPublishedDate);
+            _logger.LogInformation("Processing Transnet tender - Number: {TenderNumber}, Institution: {Institution}, Category: {Category}, Location: {Location}, HasPublishedDate: {HasPublishedDate}, HasClosingDate: {HasClosingDate}",
+                tenderNumber, institution, category, location, hasPublishedDate, hasClosingDate);
 
             // Log published date if available
             if (message.PublishedDate.HasValue)
@@ -170,10 +194,65 @@ namespace Sqs_AI_Lambda.Services
                 _logger.LogDebug("Transnet tender missing published date - Number: {TenderNumber}", tenderNumber);
             }
 
-            _logger.LogInformation("Transnet processing completed - Number: {TenderNumber}, Source: {Source}", tenderNumber, source);
+            // Log closing date if available
+            if (message.ClosingDate.HasValue)
+            {
+                _logger.LogDebug("Transnet tender closing date - Number: {TenderNumber}, ClosingDate: {ClosingDate}",
+                    tenderNumber, message.ClosingDate.Value);
+            }
 
-            // Placeholder for future Transnet-specific processing logic
+            // Log contact person if available
+            if (!string.IsNullOrEmpty(message.ContactPerson))
+            {
+                _logger.LogDebug("Transnet tender contact person - Number: {TenderNumber}, ContactPerson: {ContactPerson}",
+                    tenderNumber, message.ContactPerson);
+            }
+
+            // Generate AI summary as part of Transnet processing
+            await GenerateAndAttachSummary(message, "Transnet");
+
+            _logger.LogInformation("Transnet processing completed - Number: {TenderNumber}, Institution: {Institution}, Source: {Source}, SummaryGenerated: {HasSummary}",
+                tenderNumber, institution, source, !string.IsNullOrEmpty(message.Summary));
+
+
             await Task.CompletedTask;
+        }
+
+        /// <summary>
+        /// Generates AI summary using Bedrock and attaches it to the message
+        /// Now part of each tender processing workflow
+        /// </summary>
+        private async Task GenerateAndAttachSummary(TenderMessageBase message, string processingContext)
+        {
+            var tenderNumber = message.TenderNumber ?? "Unknown";
+
+            try
+            {
+                _logger.LogDebug("Generating Bedrock summary - TenderNumber: {TenderNumber}, Context: {ProcessingContext}",
+                    tenderNumber, processingContext);
+
+                var summary = await _bedrockSummaryService.GenerateSummaryAsync(message);
+                message.Summary = summary; // This sets the Summary property on your base class
+
+                // Add summary tag to track processing
+                message.Tags.Add("SummaryGenerated");
+                message.Tags.Add($"SummaryGeneratedBy{processingContext}");
+
+                _logger.LogInformation("Bedrock summary generated and attached - TenderNumber: {TenderNumber}, Context: {ProcessingContext}, SummaryLength: {SummaryLength}",
+                    tenderNumber, processingContext, summary?.Length ?? 0);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Failed to generate Bedrock summary - TenderNumber: {TenderNumber}, Context: {ProcessingContext}, ErrorType: {ErrorType}",
+                    tenderNumber, processingContext, ex.GetType().Name);
+
+                // Add failure tags but don't stop processing
+                message.Tags.Add("SummaryGenerationFailed");
+                message.Tags.Add($"SummaryFailedIn{processingContext}");
+
+                // Set a fall back message indicating failure with context
+                message.Summary = $"Summary generation failed for {processingContext} tender {tenderNumber}. Manual review required.";
+            }
         }
     }
 }
