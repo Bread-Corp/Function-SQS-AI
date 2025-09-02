@@ -65,6 +65,9 @@ namespace Sqs_AI_Lambda.Services
                     // Eskom message group IDs - handle both scraper and lambda sources
                     "eskomtenderscrape" or "eskomlambda" => CreateEskomTenderMessage(messageBody, messageGroupId),
 
+                    // Transnet message group IDs - handle both scraper and lambda sources
+                    "transnettenderscrape" or "transnetlambda" => CreateTransnetTenderMessage(messageBody, messageGroupId),
+
                     // Unsupported message group ID
                     _ => HandleUnsupportedMessageGroup(messageGroupId)
                 };
@@ -189,6 +192,45 @@ namespace Sqs_AI_Lambda.Services
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Unexpected error creating Eskom message - GroupId: {MessageGroupId}",
+                    messageGroupId);
+                return null;
+            }
+        }
+
+        /// <summary>
+        /// Creates Transnet tender message from JSON body with null safety
+        /// </summary>
+        private TransnetTenderMessage? CreateTransnetTenderMessage(string messageBody, string messageGroupId)
+        {
+            _logger.LogDebug("Deserializing Transnet message - GroupId: {MessageGroupId}", messageGroupId);
+
+            try
+            {
+                // Attempt JSON deserialization with null safety
+                var message = JsonSerializer.Deserialize<TransnetTenderMessage>(messageBody, _jsonOptions);
+
+                // Validate deserialized message
+                if (message == null)
+                {
+                    _logger.LogWarning("Transnet deserialization returned null - GroupId: {MessageGroupId}", messageGroupId);
+                    return null;
+                }
+
+                // Log successful deserialization with safe property access
+                _logger.LogDebug("Transnet message deserialized successfully - TenderNumber: {TenderNumber}, Source: {Source}, Title: {Title}",
+                    message.TenderNumber ?? "Unknown", message.Source ?? "Unknown", message.Title ?? "No Title");
+
+                return message;
+            }
+            catch (JsonException jsonEx)
+            {
+                _logger.LogError(jsonEx, "Failed to deserialize Transnet message - GroupId: {MessageGroupId}, Error: {ErrorMessage}",
+                    messageGroupId, jsonEx.Message);
+                return null;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Unexpected error creating Transnet message - GroupId: {MessageGroupId}",
                     messageGroupId);
                 return null;
             }
