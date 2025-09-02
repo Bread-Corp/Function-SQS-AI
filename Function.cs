@@ -1,3 +1,4 @@
+using Amazon.BedrockRuntime;
 using Amazon.Lambda.Core;
 using Amazon.Lambda.SQSEvents;
 using Amazon.SQS;
@@ -93,11 +94,13 @@ public class Function
 
         // Register AWS SQS client with default configuration for Lambda environment
         services.AddSingleton<IAmazonSQS>(provider => new AmazonSQSClient());
+        services.AddSingleton<AmazonBedrockRuntimeClient>(provider => new AmazonBedrockRuntimeClient());
 
         // Register application services as transient for per-invocation isolation
         services.AddTransient<ISqsService, SqsService>();
         services.AddTransient<IMessageProcessor, MessageProcessor>();
         services.AddTransient<IMessageFactory, MessageFactory>();
+        services.AddTransient<IBedrockSummaryService, BedrockSummaryService>();
 
         return services.BuildServiceProvider();
     }
