@@ -63,6 +63,11 @@ namespace Sqs_AI_Lambda.Services
                         await ProcessEskomTenderMessage(eskomMessage);
                         break;
 
+                    case TransnetTenderMessage transnetMessage:
+                        _logger.LogDebug("Routing to Transnet processor - TenderNumber: {TenderNumber}", transnetMessage.TenderNumber);
+                        await ProcessTransnetTenderMessage(transnetMessage);
+                        break;
+
                     default:
                         // Log unknown message types for monitoring
                         _logger.LogWarning("Unknown message type encountered - Type: {MessageType}, Source: {SourceType}, TenderNumber: {TenderNumber}",
@@ -139,6 +144,35 @@ namespace Sqs_AI_Lambda.Services
             _logger.LogInformation("Eskom processing completed - Number: {TenderNumber}, Source: {Source}", tenderNumber, source);
 
             // Placeholder for future Eskom-specific processing logic
+            await Task.CompletedTask;
+        }
+
+        /// <summary>
+        /// Processes Transnet-specific messages
+        /// </summary>
+        private async Task ProcessTransnetTenderMessage(TransnetTenderMessage message)
+        {
+            var tenderNumber = message.TenderNumber ?? "Unknown";
+            var source = message.Source ?? "Unknown";
+            var hasPublishedDate = message.PublishedDate.HasValue;
+
+            _logger.LogInformation("Processing Transnet tender - Number: {TenderNumber}, Source: {Source}, HasPublishedDate: {HasPublishedDate}",
+                tenderNumber, source, hasPublishedDate);
+
+            // Log published date if available
+            if (message.PublishedDate.HasValue)
+            {
+                _logger.LogDebug("Transnet tender published date - Number: {TenderNumber}, PublishedDate: {PublishedDate}",
+                    tenderNumber, message.PublishedDate.Value);
+            }
+            else
+            {
+                _logger.LogDebug("Transnet tender missing published date - Number: {TenderNumber}", tenderNumber);
+            }
+
+            _logger.LogInformation("Transnet processing completed - Number: {TenderNumber}, Source: {Source}", tenderNumber, source);
+
+            // Placeholder for future Transnet-specific processing logic
             await Task.CompletedTask;
         }
     }
