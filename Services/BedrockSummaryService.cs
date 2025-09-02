@@ -9,16 +9,23 @@ using System.Linq;
 using System.Text;
 using System.Text.Json;
 using System.Threading.Tasks;
+using System.Threading;
 
 namespace Sqs_AI_Lambda.Services
 {
     /// <summary>
     /// Service for generating AI-powered tender summaries using AWS Bedrock
+    /// Enhanced with retry logic, rate limiting, and robust error handling for production use
     /// </summary>
     public class BedrockSummaryService : IBedrockSummaryService
     {
         private readonly ILogger<BedrockSummaryService> _logger;
         private readonly AmazonBedrockRuntimeClient _bedrockClient;
+
+        // Rate limiting and retry configuration
+        private static readonly SemaphoreSlim _rateLimitSemaphore = new(3, 3); // Max 3 concurrent requests
+        private const int MaxRetryAttempts = 5;
+        private const int BaseDelayMs = 1000; // 1 second base delay
 
         private const string SystemPrompt = @"You are a professional tender analyst. 
             Analyse the tender data and create a structured summary with these sections:
@@ -44,7 +51,7 @@ namespace Sqs_AI_Lambda.Services
 
         /// <summary>
         /// Generates a comprehensive summary for the provided tender message using Amazon Nova Pro
-        /// Optimized for minimal token usage with full model support
+        /// Enhanced with retry logic and rate limiting to handle throttling
         /// </summary>
         public async Task<string> GenerateSummaryAsync(TenderMessageBase tenderMessage)
         {
@@ -52,8 +59,11 @@ namespace Sqs_AI_Lambda.Services
             var tenderNumber = tenderMessage.TenderNumber ?? "Unknown";
             var sourceType = tenderMessage.GetSourceType();
 
-            _logger.LogInformation("Starting Nova Pro summary - TenderNumber: {TenderNumber}, Source: {SourceType}",
+            _logger.LogInformation("Starting Nova Pro summary with rate limiting - TenderNumber: {TenderNumber}, Source: {SourceType}",
                 tenderNumber, sourceType);
+
+            // Wait for rate limit semaphore to control concurrent requests
+            await _rateLimitSemaphore.WaitAsync();
 
             try
             {
@@ -63,50 +73,11 @@ namespace Sqs_AI_Lambda.Services
                 _logger.LogDebug("Tender JSON created - TenderNumber: {TenderNumber}, JsonLength: {JsonLength}",
                     tenderNumber, tenderJson.Length);
 
-                // Optimised payload for token efficiency
-                var payload = new
-                {
-                    messages = new[]
-                    {
-                        new
-                        {
-                            role = "user",
-                            content = new[]
-                            {
-                                new
-                                {
-                                    text = $"{SystemPrompt}\n\nTender: {tenderJson}"
-                                }
-                            }
-                        }
-                    },
-                    inferenceConfig = new
-                    {
-                        max_new_tokens = 800,    // Efficient token usage
-                        temperature = 0.1,       // Low for consistent output
-                        top_p = 0.9
-                    }
-                };
-
-                var request = new InvokeModelRequest
-                {
-                    ModelId = "amazon.nova-pro-v1:0",
-                    ContentType = "application/json",
-                    Accept = "application/json",
-                    Body = new MemoryStream(Encoding.UTF8.GetBytes(JsonSerializer.Serialize(payload)))
-                };
-
-                _logger.LogDebug("Sending to Nova Pro - TenderNumber: {TenderNumber}", tenderNumber);
-
-                var response = await _bedrockClient.InvokeModelAsync(request);
-
-                using var responseStream = new StreamReader(response.Body);
-                var responseText = await responseStream.ReadToEndAsync();
-
-                var summary = ParseNovaResponse(responseText);
+                // Execute with retry logic for handling throttling
+                var summary = await ExecuteWithRetryAsync(tenderJson, tenderNumber);
 
                 var duration = (DateTime.UtcNow - startTime).TotalMilliseconds;
-                _logger.LogInformation("Nova Pro summary completed - TenderNumber: {TenderNumber}, Duration: {Duration}ms, Length: {Length}",
+                _logger.LogInformation("Nova Pro summary completed successfully - TenderNumber: {TenderNumber}, Duration: {Duration}ms, Length: {Length}",
                     tenderNumber, duration, summary.Length);
 
                 return summary;
@@ -114,11 +85,141 @@ namespace Sqs_AI_Lambda.Services
             catch (Exception ex)
             {
                 var duration = (DateTime.UtcNow - startTime).TotalMilliseconds;
-                _logger.LogError(ex, "Nova Pro summary failed - TenderNumber: {TenderNumber}, Duration: {Duration}ms",
-                    tenderNumber, duration);
+                _logger.LogError(ex, "Nova Pro summary failed after all retries - TenderNumber: {TenderNumber}, Duration: {Duration}ms, ErrorType: {ErrorType}",
+                    tenderNumber, duration, ex.GetType().Name);
 
                 return GenerateFallbackSummary(tenderMessage);
             }
+            finally
+            {
+                // Always release the semaphore to allow other requests
+                _rateLimitSemaphore.Release();
+            }
+        }
+
+        /// <summary>
+        /// Executes Bedrock request with exponential backoff retry logic for handling throttling
+        /// </summary>
+        private async Task<string> ExecuteWithRetryAsync(string tenderJson, string tenderNumber)
+        {
+            var attempt = 0;
+
+            while (attempt < MaxRetryAttempts)
+            {
+                attempt++;
+
+                try
+                {
+                    _logger.LogDebug("Bedrock request attempt {Attempt}/{MaxAttempts} - TenderNumber: {TenderNumber}",
+                        attempt, MaxRetryAttempts, tenderNumber);
+
+                    // Optimised payload for token efficiency
+                    var payload = new
+                    {
+                        messages = new[]
+                        {
+                            new
+                            {
+                                role = "user",
+                                content = new[]
+                                {
+                                    new
+                                    {
+                                        text = $"{SystemPrompt}\n\nTender: {tenderJson}"
+                                    }
+                                }
+                            }
+                        },
+                        inferenceConfig = new
+                        {
+                            max_new_tokens = 800,    // Efficient token usage
+                            temperature = 0.3,       // Low for consistent output
+                            top_p = 0.9
+                        }
+                    };
+
+                    var request = new InvokeModelRequest
+                    {
+                        ModelId = "amazon.nova-pro-v1:0",
+                        ContentType = "application/json",
+                        Accept = "application/json",
+                        Body = new MemoryStream(Encoding.UTF8.GetBytes(JsonSerializer.Serialize(payload)))
+                    };
+
+                    var response = await _bedrockClient.InvokeModelAsync(request);
+
+                    using var responseStream = new StreamReader(response.Body);
+                    var responseText = await responseStream.ReadToEndAsync();
+
+                    var summary = ParseNovaResponse(responseText);
+
+                    _logger.LogDebug("Bedrock request successful on attempt {Attempt} - TenderNumber: {TenderNumber}",
+                        attempt, tenderNumber);
+
+                    return summary;
+                }
+                catch (ThrottlingException)
+                {
+                    if (attempt == MaxRetryAttempts)
+                    {
+                        _logger.LogError("Bedrock throttling - Max retries exceeded - TenderNumber: {TenderNumber}, Attempt: {Attempt}",
+                            tenderNumber, attempt);
+                        throw;
+                    }
+
+                    // Calculate exponential back off delay with jitter
+                    var delay = CalculateBackoffDelay(attempt);
+
+                    _logger.LogWarning("Bedrock throttling detected - Attempt {Attempt}/{MaxAttempts}, Retrying in {Delay}ms - TenderNumber: {TenderNumber}",
+                        attempt, MaxRetryAttempts, delay, tenderNumber);
+
+                    await Task.Delay(delay);
+                }
+                catch (Amazon.Runtime.Internal.HttpErrorResponseException httpEx) when (httpEx.Message.Contains("Too many requests"))
+                {
+                    if (attempt == MaxRetryAttempts)
+                    {
+                        _logger.LogError("HTTP rate limit - Max retries exceeded - TenderNumber: {TenderNumber}, Attempt: {Attempt}",
+                            tenderNumber, attempt);
+                        throw;
+                    }
+
+                    // Handle HTTP-level throttling
+                    var delay = CalculateBackoffDelay(attempt);
+
+                    _logger.LogWarning("HTTP rate limit detected - Attempt {Attempt}/{MaxAttempts}, Retrying in {Delay}ms - TenderNumber: {TenderNumber}",
+                        attempt, MaxRetryAttempts, delay, tenderNumber);
+
+                    await Task.Delay(delay);
+                }
+                catch (Exception ex)
+                {
+                    // For non-throttling exceptions, don't retry
+                    _logger.LogError(ex, "Bedrock request failed with non-retryable error - TenderNumber: {TenderNumber}, Attempt: {Attempt}, ErrorType: {ErrorType}",
+                        tenderNumber, attempt, ex.GetType().Name);
+                    throw;
+                }
+            }
+
+            throw new InvalidOperationException($"Max retry attempts exceeded for tender {tenderNumber}");
+        }
+
+        /// <summary>
+        /// Calculates exponential back off delay with jitter to avoid thundering herd problem
+        /// </summary>
+        private int CalculateBackoffDelay(int attempt)
+        {
+            // Exponential backoff: 1s, 2s, 4s, 8s, 16s
+            var exponentialDelay = BaseDelayMs * Math.Pow(2, attempt - 1);
+
+            // Add jitter (±25% randomization) to prevent thundering herd
+            var random = new Random();
+            var jitter = random.NextDouble() * 0.5 + 0.75; // 0.75 to 1.25 multiplier
+
+            var finalDelay = (int)(exponentialDelay * jitter);
+
+            // Cap at 30 seconds maximum to prevent excessive delays
+            return Math.Min(finalDelay, 30000);
         }
 
         /// <summary>
@@ -254,7 +355,7 @@ namespace Sqs_AI_Lambda.Services
                     }
                 }
 
-                _logger.LogWarning("Unexpected Nova Pro response format");
+                _logger.LogWarning("Unexpected Nova Pro response format - TenderNumber: Context not available");
                 return "Summary generated but response parsing failed.";
             }
             catch (Exception ex)
@@ -265,13 +366,14 @@ namespace Sqs_AI_Lambda.Services
         }
 
         /// <summary>
-        /// Generates a model-aware fall back summary when Bedrock fails
+        /// Generates a model-aware fallback summary when Bedrock fails
+        /// Enhanced with throttling context information
         /// </summary>
         private string GenerateFallbackSummary(TenderMessageBase tender)
         {
             var summary = new StringBuilder();
 
-            summary.AppendLine("**AUTOMATED SUMMARY**");
+            summary.AppendLine("**AUTOMATED SUMMARY (Fallback)**");
             summary.AppendLine($"**Tender:** {tender.Title}");
             summary.AppendLine($"**Number:** {tender.TenderNumber}");
             summary.AppendLine($"**Source:** {tender.GetSourceType()}");
@@ -279,7 +381,7 @@ namespace Sqs_AI_Lambda.Services
             if (!string.IsNullOrEmpty(tender.Description))
                 summary.AppendLine($"**Purpose:** {tender.Description}");
 
-            // Add model-specific fall back information
+            // Add model-specific fallback information
             switch (tender)
             {
                 case ETenderMessage eTender:
@@ -322,9 +424,9 @@ namespace Sqs_AI_Lambda.Services
             if (supportingDocs?.Count > 0)
                 summary.AppendLine($"**Documents:** {supportingDocs.Count} available");
 
-            summary.AppendLine("*AI summary unavailable - manual review required*");
+            summary.AppendLine("*AI summary unavailable due to service limitations - manual review required*");
 
-            _logger.LogInformation("Generated model-aware fallback summary - TenderNumber: {TenderNumber}, Type: {Type}",
+            _logger.LogInformation("Generated enhanced fallback summary - TenderNumber: {TenderNumber}, Type: {Type}",
                 tender.TenderNumber, tender.GetType().Name);
 
             return summary.ToString();
