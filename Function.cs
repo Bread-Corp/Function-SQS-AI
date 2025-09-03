@@ -16,7 +16,7 @@ using System.Text.Json;
 namespace Sqs_AI_Lambda;
 
 /// <summary>
-/// AWS Lambda function for processing tender messages from SQS with continuous queue polling
+/// AWS Lambda function for processing tender messages (AI enrichment) from SQS with continuous queue polling
 /// </summary>
 public class Function
 {
