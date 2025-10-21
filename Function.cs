@@ -9,6 +9,7 @@ using Sqs_AI_Lambda.Interfaces;
 using Sqs_AI_Lambda.Models;
 using Sqs_AI_Lambda.Services;
 using System.Text.Json;
+using Amazon.SimpleSystemsManagement;
 
 // Assembly attribute to enable the Lambda function's JSON input to be converted into a .NET class.
 [assembly: LambdaSerializer(typeof(Amazon.Lambda.Serialization.SystemTextJson.DefaultLambdaJsonSerializer))]
@@ -92,14 +93,16 @@ public class Function
             builder.SetMinimumLevel(Microsoft.Extensions.Logging.LogLevel.Information);
         });
 
-        // Register AWS SQS client with default configuration for Lambda environment
+        // Register AWS Service Clients as Singletons
         services.AddSingleton<IAmazonSQS>(provider => new AmazonSQSClient());
         services.AddSingleton<AmazonBedrockRuntimeClient>(provider => new AmazonBedrockRuntimeClient());
+        services.AddSingleton<IAmazonSimpleSystemsManagement>(provider => new AmazonSimpleSystemsManagementClient());
 
         // Register application services as transient for per-invocation isolation
         services.AddTransient<ISqsService, SqsService>();
         services.AddTransient<IMessageProcessor, MessageProcessor>();
         services.AddTransient<IMessageFactory, MessageFactory>();
+        services.AddSingleton<IPromptService, PromptService>();
         services.AddTransient<IBedrockSummaryService, BedrockSummaryService>();
 
         return services.BuildServiceProvider();

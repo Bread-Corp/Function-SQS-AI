@@ -14,39 +14,27 @@ using System.Threading;
 namespace Sqs_AI_Lambda.Services
 {
     /// <summary>
-    /// Service for generating AI-powered tender summaries using AWS Bedrock
-    /// Enhanced with retry logic, rate limiting, and robust error handling for production use
+    /// Service for generating AI-powered tender summaries using AWS Bedrock.
+    /// It now dynamically fetches prompts from a dedicated prompt service.
+    /// It now uses Anthropic's Claude 3 Sonnet model.
     /// </summary>
     public class BedrockSummaryService : IBedrockSummaryService
     {
         private readonly ILogger<BedrockSummaryService> _logger;
         private readonly AmazonBedrockRuntimeClient _bedrockClient;
+        private readonly IPromptService _promptService;
 
         // Rate limiting and retry configuration
         private static readonly SemaphoreSlim _rateLimitSemaphore = new(3, 3); // Max 3 concurrent requests
         private const int MaxRetryAttempts = 5;
         private const int BaseDelayMs = 1000; // 1 second base delay
 
-        private const string SystemPrompt = @"You are a professional tender analyst. 
-            Analyse the tender data and create a structured summary with these sections:
-
-            **PURPOSE:** What the tender is for and scope
-            **ELIGIBILITY:** Who can apply and requirements  
-            **APPLICATION:** How to apply, deadlines, procedures
-            **LOCATION/CONTACT:** Location details and contact info
-            **DOCUMENTS:** Required/supporting documents
-            **DETAILS:** Other important information
-
-            Guidelines:
-            - Use only provided information
-            - State Information not provided for missing info
-            - Be concise but comprehensive
-            - Use bullet points for clarity";
-
-        public BedrockSummaryService(ILogger<BedrockSummaryService> logger, AmazonBedrockRuntimeClient bedrockClient)
+        
+        public BedrockSummaryService(ILogger<BedrockSummaryService> logger, AmazonBedrockRuntimeClient bedrockClient, IPromptService promptService)
         {
             _logger = logger;
             _bedrockClient = bedrockClient;
+            _promptService = promptService;
         }
 
         /// <summary>
@@ -59,7 +47,7 @@ namespace Sqs_AI_Lambda.Services
             var tenderNumber = tenderMessage.TenderNumber ?? "Unknown";
             var sourceType = tenderMessage.GetSourceType();
 
-            _logger.LogInformation("Starting Nova Pro summary with rate limiting - TenderNumber: {TenderNumber}, Source: {SourceType}",
+            _logger.LogInformation("Starting summary generation - TenderNumber: {TenderNumber}, Source: {SourceType}",
                 tenderNumber, sourceType);
 
             // Wait for rate limit semaphore to control concurrent requests
@@ -67,25 +55,29 @@ namespace Sqs_AI_Lambda.Services
 
             try
             {
+                // Fetch the dynamic, combined prompt for the specific source
+                var combinedPrompt = await _promptService.GetPromptAsync(sourceType);
+
                 // Convert to compact JSON format to minimize tokens
                 var tenderJson = ConvertTenderToCompactJson(tenderMessage);
 
                 _logger.LogDebug("Tender JSON created - TenderNumber: {TenderNumber}, JsonLength: {JsonLength}",
                     tenderNumber, tenderJson.Length);
 
-                // Execute with retry logic for handling throttling
-                var summary = await ExecuteWithRetryAsync(tenderJson, tenderNumber);
+                // Pass the combined prompt to the execution method
+                var summary = await ExecuteWithRetryAsync(combinedPrompt, tenderJson, tenderNumber);
 
                 var duration = (DateTime.UtcNow - startTime).TotalMilliseconds;
-                _logger.LogInformation("Nova Pro summary completed successfully - TenderNumber: {TenderNumber}, Duration: {Duration}ms, Length: {Length}",
-                    tenderNumber, duration, summary.Length);
+
+                _logger.LogInformation("Summary completed successfully - TenderNumber: {TenderNumber}, Duration: {Duration}ms",
+                    tenderNumber, duration);
 
                 return summary;
             }
             catch (Exception ex)
             {
                 var duration = (DateTime.UtcNow - startTime).TotalMilliseconds;
-                _logger.LogError(ex, "Nova Pro summary failed after all retries - TenderNumber: {TenderNumber}, Duration: {Duration}ms, ErrorType: {ErrorType}",
+                _logger.LogError(ex, "Summary generation failed after all retries - TenderNumber: {TenderNumber}, Duration: {Duration}ms, ErrorType: {ErrorType}",
                     tenderNumber, duration, ex.GetType().Name);
 
                 return GenerateFallbackSummary(tenderMessage);
@@ -98,9 +90,9 @@ namespace Sqs_AI_Lambda.Services
         }
 
         /// <summary>
-        /// Executes Bedrock request with exponential backoff retry logic for handling throttling
+        /// Executes Bedrock request with retry logic, now using a dynamic prompt.
         /// </summary>
-        private async Task<string> ExecuteWithRetryAsync(string tenderJson, string tenderNumber)
+        private async Task<string> ExecuteWithRetryAsync(string combinedPrompt, string tenderJson, string tenderNumber)
         {
             var attempt = 0;
 
@@ -113,9 +105,12 @@ namespace Sqs_AI_Lambda.Services
                     _logger.LogDebug("Bedrock request attempt {Attempt}/{MaxAttempts} - TenderNumber: {TenderNumber}",
                         attempt, MaxRetryAttempts, tenderNumber);
 
-                    // Optimised payload for token efficiency
+                    // Payload structured for Anthropic Claude 3 models
                     var payload = new
                     {
+                        anthropic_version = "bedrock-2023-05-31", // Required for Claude 3
+                        max_tokens = 900,
+                        temperature = 0.3,
                         messages = new[]
                         {
                             new
@@ -125,22 +120,17 @@ namespace Sqs_AI_Lambda.Services
                                 {
                                     new
                                     {
-                                        text = $"{SystemPrompt}\n\nTender: {tenderJson}"
+                                        type = "text",
+                                        text = $"{combinedPrompt}\n\nTender Data:\n{tenderJson}"
                                     }
                                 }
                             }
-                        },
-                        inferenceConfig = new
-                        {
-                            max_new_tokens = 800,    // Efficient token usage
-                            temperature = 0.3,       // Low for consistent output
-                            top_p = 0.9
                         }
                     };
 
                     var request = new InvokeModelRequest
                     {
-                        ModelId = "amazon.nova-pro-v1:0",
+                        ModelId = "anthropic.claude-3-sonnet-20240229-v1:0", // Model ID changed to Claude 3 Sonnet
                         ContentType = "application/json",
                         Accept = "application/json",
                         Body = new MemoryStream(Encoding.UTF8.GetBytes(JsonSerializer.Serialize(payload)))
@@ -151,7 +141,8 @@ namespace Sqs_AI_Lambda.Services
                     using var responseStream = new StreamReader(response.Body);
                     var responseText = await responseStream.ReadToEndAsync();
 
-                    var summary = ParseNovaResponse(responseText);
+                    // Call the new response parser for Claude
+                    var summary = ParseClaudeResponse(responseText);
 
                     _logger.LogDebug("Bedrock request successful on attempt {Attempt} - TenderNumber: {TenderNumber}",
                         attempt, tenderNumber);
@@ -361,7 +352,7 @@ namespace Sqs_AI_Lambda.Services
         }
 
         /// <summary>
-        /// Parses Amazon Nova Pro's response to extract the summary content
+        /// Parses Amazon Nova's response to extract the summary content
         /// </summary>
         private string ParseNovaResponse(string responseJson)
         {
@@ -390,6 +381,38 @@ namespace Sqs_AI_Lambda.Services
             {
                 _logger.LogError(ex, "Failed to parse Nova Pro response");
                 return "Summary generation completed but response parsing failed.";
+            }
+        }
+
+
+        /// <summary>
+        /// Parses the JSON response from an Anthropic Claude 3 model to extract the summary content.
+        /// </summary>
+        private string ParseClaudeResponse(string responseJson)
+        {
+            try
+            {
+                using var document = JsonDocument.Parse(responseJson);
+                var contentArray = document.RootElement.GetProperty("content");
+
+                if (contentArray.ValueKind == JsonValueKind.Array)
+                {
+                    foreach (var contentItem in contentArray.EnumerateArray())
+                    {
+                        if (contentItem.TryGetProperty("type", out var typeProperty) && typeProperty.GetString() == "text" &&
+                            contentItem.TryGetProperty("text", out var textProperty))
+                        {
+                            return textProperty.GetString() ?? "Summary generated but content extraction failed.";
+                        }
+                    }
+                }
+                _logger.LogWarning("Unexpected Claude 3 response format: 'text' field not found in content array.");
+                return "Summary generated but response parsing failed (unexpected format).";
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Failed to parse Claude 3 response JSON: {ResponseJson}", responseJson);
+                return "Summary generation completed but response parsing failed (exception).";
             }
         }
 
