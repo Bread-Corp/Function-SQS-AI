@@ -28,7 +28,7 @@ public class Function
     private readonly JsonSerializerOptions _jsonOptions;
 
     // Queue URLs configured via environment variables for deployment flexibility
-    private readonly string _writeQueueUrl;
+    private readonly string _tagQueueUrl;
     private readonly string _failedQueueUrl;
     private readonly string _sourceQueueUrl;
 
@@ -60,16 +60,16 @@ public class Function
         };
 
         // Load and validate required environment variables for queue configuration
-        var writeQueueEnv = Environment.GetEnvironmentVariable("WRITE_QUEUE_URL");
+        var tagQueueEnv = Environment.GetEnvironmentVariable("TAG_QUEUE_URL");
         var failedQueueEnv = Environment.GetEnvironmentVariable("FAILED_QUEUE_URL");
         var sourceQueueEnv = Environment.GetEnvironmentVariable("SOURCE_QUEUE_URL");
 
-        _logger.LogInformation("Initializing Lambda function - WriteQueue: {WriteQueueSet}, FailedQueue: {FailedQueueSet}, SourceQueue: {SourceQueueSet}",
-            !string.IsNullOrEmpty(writeQueueEnv), !string.IsNullOrEmpty(failedQueueEnv), !string.IsNullOrEmpty(sourceQueueEnv));
+        _logger.LogInformation("Initializing Lambda function - TagQueue: {TagQueueSet}, FailedQueue: {FailedQueueSet}, SourceQueue: {SourceQueueSet}",
+            !string.IsNullOrEmpty(tagQueueEnv), !string.IsNullOrEmpty(failedQueueEnv), !string.IsNullOrEmpty(sourceQueueEnv));
 
         // Validate and assign required queue URLs with descriptive error messages
-        _writeQueueUrl = writeQueueEnv ??
-            throw new InvalidOperationException("WRITE_QUEUE_URL environment variable is required for processed message output");
+        _tagQueueUrl = tagQueueEnv ??
+            throw new InvalidOperationException("TAG_QUEUE_URL environment variable is required for processed message output");
         _failedQueueUrl = failedQueueEnv ??
             throw new InvalidOperationException("FAILED_QUEUE_URL environment variable is required for error handling");
         _sourceQueueUrl = sourceQueueEnv ??
@@ -279,26 +279,26 @@ public class Function
             }
         }
 
-        // Phase 2: Send successfully processed messages to write queue
-        var successfullySentToWriteQueue = new List<(TenderMessageBase message, QueueMessage record)>();
+        // Phase 2: Send successfully processed messages to tag queue
+        var successfullySentToTagQueue = new List<(TenderMessageBase message, QueueMessage record)>();
 
         if (processedMessages.Any())
         {
             try
             {
-                _logger.LogDebug("Sending processed messages to write queue - Count: {Count}, QueueUrl: {WriteQueueUrl}",
-                    processedMessages.Count, _writeQueueUrl);
+                _logger.LogDebug("Sending processed messages to tag queue - Count: {Count}, QueueUrl: {TagQueueUrl}",
+                    processedMessages.Count, _tagQueueUrl);
 
                 // Convert to object list for SQS service batch operation
                 var messagesToSend = processedMessages.Select(pm => pm.message).Cast<object>().ToList();
-                await _sqsService.SendMessageBatchAsync(_writeQueueUrl, messagesToSend);
+                await _sqsService.SendMessageBatchAsync(_tagQueueUrl, messagesToSend);
 
-                successfullySentToWriteQueue.AddRange(processedMessages);
-                _logger.LogInformation("Successfully sent to write queue - Count: {Count}", processedMessages.Count);
+                successfullySentToTagQueue.AddRange(processedMessages);
+                _logger.LogInformation("Successfully sent to tag queue - Count: {Count}", processedMessages.Count);
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Failed to send processed messages to write queue - Count: {Count}", processedMessages.Count);
+                _logger.LogError(ex, "Failed to send processed messages to tag queue - Count: {Count}", processedMessages.Count);
 
                 // Move failed sends to DLQ processing
                 foreach (var (message, record) in processedMessages)
@@ -341,14 +341,14 @@ public class Function
 
         // Phase 4: Clean up successfully processed messages from source queue
         var deletedCount = 0;
-        if (successfullySentToWriteQueue.Any())
+        if (successfullySentToTagQueue.Any())
         {
             try
             {
-                _logger.LogDebug("Deleting processed messages from source queue - Count: {Count}", successfullySentToWriteQueue.Count);
+                _logger.LogDebug("Deleting processed messages from source queue - Count: {Count}", successfullySentToTagQueue.Count);
 
                 // Prepare batch delete request with message IDs and receipt handles
-                var messagesToDelete = successfullySentToWriteQueue
+                var messagesToDelete = successfullySentToTagQueue
                     .Select(pm => (pm.record.MessageId, pm.record.ReceiptHandle))
                     .ToList();
 
@@ -360,10 +360,10 @@ public class Function
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Failed to delete processed messages from source queue - Count: {Count}, Impact: Messages may be reprocessed",
-                    successfullySentToWriteQueue.Count);
+                    successfullySentToTagQueue.Count);
 
                 // Log individual message details for operational troubleshooting
-                foreach (var (message, record) in successfullySentToWriteQueue)
+                foreach (var (message, record) in successfullySentToTagQueue)
                 {
                     _logger.LogWarning("Delete failed for MessageId: {MessageId}, ReceiptHandle: {ReceiptHandle}, TenderNumber: {TenderNumber}",
                         record.MessageId, record.ReceiptHandle, message.TenderNumber ?? "Unknown");
@@ -373,9 +373,9 @@ public class Function
 
         var batchDuration = (DateTime.UtcNow - batchStart).TotalMilliseconds;
         _logger.LogInformation("Batch processing completed - Processed: {Processed}, Failed: {Failed}, Deleted: {Deleted}, Duration: {Duration}ms",
-            successfullySentToWriteQueue.Count, failedMessages.Count, deletedCount, batchDuration);
+            successfullySentToTagQueue.Count, failedMessages.Count, deletedCount, batchDuration);
 
-        return (successfullySentToWriteQueue.Count, failedMessages.Count, deletedCount);
+        return (successfullySentToTagQueue.Count, failedMessages.Count, deletedCount);
     }
 
     /// <summary>

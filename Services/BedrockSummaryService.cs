@@ -265,6 +265,12 @@ namespace Sqs_AI_Lambda.Services
                 case EskomTenderMessage eskomTender:
                     AddEskomSpecificFields(compactTender, eskomTender);
                     break;
+                case SarsTenderMessage sarsTender:
+                    AddSarsSpecificFields(compactTender, sarsTender);
+                    break;
+                case SanralTenderMessage sanralTender:
+                    AddSanralSpecificFields(compactTender, sanralTender);
+                    break;
             }
 
             return JsonSerializer.Serialize(compactTender, new JsonSerializerOptions { WriteIndented = false });
@@ -330,6 +336,28 @@ namespace Sqs_AI_Lambda.Services
 
             if (eskomTender.ClosingDate.HasValue)
                 compactTender["closing"] = eskomTender.ClosingDate.Value.ToString("yyyy-MM-dd HH:mm");
+        }
+
+        /// <summary>
+        /// Adds SARS-specific fields to the compact tender object for Bedrock processing.
+        /// </summary>
+        private void AddSarsSpecificFields(Dictionary<string, object> compactTender, SarsTenderMessage sarsTender)
+        {
+            if (!string.IsNullOrEmpty(sarsTender.BriefingSession)) compactTender["briefingSession"] = sarsTender.BriefingSession;
+            if (sarsTender.PublishedDate.HasValue) compactTender["published"] = sarsTender.PublishedDate.Value.ToString("yyyy-MM-dd HH:mm");
+            if (sarsTender.ClosingDate.HasValue) compactTender["closing"] = sarsTender.ClosingDate.Value.ToString("yyyy-MM-dd HH:mm");
+        }
+
+        /// <summary>
+        /// Adds SANRAL-specific fields to the compact tender object for Bedrock processing.
+        /// </summary>
+        private void AddSanralSpecificFields(Dictionary<string, object> compactTender, SanralTenderMessage sanralTender)
+        {
+            if (!string.IsNullOrEmpty(sanralTender.Category)) compactTender["category"] = sanralTender.Category;
+            if (!string.IsNullOrEmpty(sanralTender.Region)) compactTender["region"] = sanralTender.Region;
+            if (!string.IsNullOrEmpty(sanralTender.FullNoticeText)) compactTender["fullNoticeText"] = sanralTender.FullNoticeText;
+            if (sanralTender.PublishedDate.HasValue) compactTender["published"] = sanralTender.PublishedDate.Value.ToString("yyyy-MM-dd HH:mm");
+            if (sanralTender.ClosingDate.HasValue) compactTender["closing"] = sanralTender.ClosingDate.Value.ToString("yyyy-MM-dd HH:mm");
         }
 
         /// <summary>
@@ -411,6 +439,17 @@ namespace Sqs_AI_Lambda.Services
                         summary.AppendLine($"**Source Detail:** {eskomTender.Source}");
                     if (eskomTender.ClosingDate.HasValue)
                         summary.AppendLine($"**Closing:** {eskomTender.ClosingDate.Value:yyyy-MM-dd HH:mm}");
+                    break;
+
+                case SarsTenderMessage sarsTender:
+                    if (sarsTender.ClosingDate.HasValue) summary.AppendLine($"**Closing:** {sarsTender.ClosingDate.Value:yyyy-MM-dd HH:mm}");
+                    if (!string.IsNullOrEmpty(sarsTender.BriefingSession)) summary.AppendLine($"**Briefing Session:** {sarsTender.BriefingSession}");
+                    break;
+
+                case SanralTenderMessage sanralTender:
+                    if (sanralTender.ClosingDate.HasValue) summary.AppendLine($"**Closing:** {sanralTender.ClosingDate.Value:yyyy-MM-dd HH:mm}");
+                    if (!string.IsNullOrEmpty(sanralTender.Category)) summary.AppendLine($"**Category:** {sanralTender.Category}");
+                    if (!string.IsNullOrEmpty(sanralTender.Region)) summary.AppendLine($"**Region:** {sanralTender.Region}");
                     break;
             }
 

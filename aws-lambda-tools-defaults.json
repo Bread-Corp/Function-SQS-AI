@@ -1,27 +1,26 @@
-
 {
-    "Information" : [
-        "This file provides default values for the deployment wizard inside Visual Studio and the AWS Lambda commands added to the .NET Core CLI.",
-        "To learn more about the Lambda commands with the .NET Core CLI execute the following command at the command line in the project root directory.",
-        "dotnet lambda help",
-        "All the command line options for the Lambda command can be specified in this file."
-    ],
-    "profile"     : "default",
-    "region"      : "us-east-1",
-    "configuration" : "Release",
-    "function-runtime" : "dotnet8",
-    "function-memory-size" : 512,
-    "function-timeout"     : 30,
-    "function-handler"     : "Sqs_AI_Lambda::Sqs_AI_Lambda.Function::FunctionHandler",
-    "environment-variables" : "\"SOURCE_QUEUE_URL\"=\"https://sqs.us-east-1.amazonaws.com/211635102441/AIQueue.fifo\";\"FAILED_QUEUE_URL\"=\"https://sqs.us-east-1.amazonaws.com/211635102441/FailedQueue.fifo\";\"WRITE_QUEUE_URL\"=\"https://sqs.us-east-1.amazonaws.com/211635102441/WriteQueue.fifo\"",
-    "framework"             : "net8.0",
-    "function-name"         : "AILambda",
-    "function-description"  : "AWS Lambda function to dequeue messages (tenders), enrich using AI services and then enqueue messages (tenders)",
-    "package-type"          : "Zip",
-    "function-role"         : "arn:aws:iam::211635102441:role/AI_Lambda_Role",
-    "function-architecture" : "x86_64",
-    "function-subnets"      : "",
-    "function-security-groups" : "",
-    "tracing-mode"             : "PassThrough",
-    "image-tag"                : ""
+  "Information": [
+    "This file provides default values for the deployment wizard inside Visual Studio and the AWS Lambda commands added to the .NET Core CLI.",
+    "To learn more about the Lambda commands with the .NET Core CLI execute the following command at the command line in the project root directory.",
+    "dotnet lambda help",
+    "All the command line options for the Lambda command can be specified in this file."
+  ],
+  "profile": "default",
+  "region": "us-east-1",
+  "configuration": "Release",
+  "function-runtime": "dotnet8",
+  "function-memory-size": 512,
+  "function-timeout": 900,
+  "function-handler": "Sqs_AI_Lambda::Sqs_AI_Lambda.Function::FunctionHandler",
+  "environment-variables": "\u0022SOURCE_QUEUE_URL\u0022=\u0022https://sqs.us-east-1.amazonaws.com/211635102441/AIQueue.fifo\u0022;\u0022FAILED_QUEUE_URL\u0022=\u0022https://sqs.us-east-1.amazonaws.com/211635102441/FailedQueue.fifo\u0022;\u0022TAG_QUEUE_URL\u0022=\u0022https://sqs.us-east-1.amazonaws.com/211635102441/TagQueue.fifo\u0022",
+  "framework": "net8.0",
+  "function-name": "AILambda",
+  "function-description": "Core AI enrichment service for the tender pipeline. Consumes messages from the AI queue, calls AWS Bedrock to generate a summary, and sends the enriched tender to the tag queue for classification.",
+  "package-type": "Zip",
+  "function-role": "arn:aws:iam::211635102441:role/AI_Lambda_Role",
+  "function-architecture": "x86_64",
+  "function-subnets": "",
+  "function-security-groups": "",
+  "tracing-mode": "PassThrough",
+  "image-tag": ""
 }

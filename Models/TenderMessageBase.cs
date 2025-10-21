@@ -141,8 +141,8 @@ namespace Sqs_AI_Lambda.Models
         /// <value>
         /// A string containing the summary of the tender. Defaults to null if not set.
         /// </value>
-        [JsonPropertyName("summary")]
-        public string? Summary { get; set; }
+        [JsonPropertyName("ai_summary")]
+        public string? AISummary { get; set; }
 
         /// <summary>
         /// Gets the source type identifier for this tender message.

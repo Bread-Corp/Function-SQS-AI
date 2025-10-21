@@ -60,13 +60,19 @@ namespace Sqs_AI_Lambda.Services
                 var result = groupIdLower switch
                 {
                     // eTender message group IDs - handle both scraper and lambda sources
-                    "etenderscrape" or "etenderlambda" => CreateETenderMessage(messageBody, messageGroupId),
+                    "etenderscrape" or "etenderlambda"or "etender" or "etenders" => CreateETenderMessage(messageBody, messageGroupId),
 
                     // Eskom message group IDs - handle both scraper and lambda sources
-                    "eskomtenderscrape" or "eskomlambda" => CreateEskomTenderMessage(messageBody, messageGroupId),
+                    "eskomtenderscrape" or "eskomlambda"or "eskom" => CreateEskomTenderMessage(messageBody, messageGroupId),
 
                     // Transnet message group IDs - handle both scraper and lambda sources
-                    "transnettenderscrape" or "transnetlambda" => CreateTransnetTenderMessage(messageBody, messageGroupId),
+                    "transnettenderscrape" or "transnetlambda"or "transnet" => CreateTransnetTenderMessage(messageBody, messageGroupId),
+
+                    // SARS message group IDs
+                    "sarstenderscrape" or "sarslambda" or "sars" => CreateSarsTenderMessage(messageBody, messageGroupId),
+
+                    // SANRAL message group IDs
+                    "Sanraltenderscrape" or "sanrallambda" or "sanral" => CreateSanralTenderMessage(messageBody, messageGroupId),
 
                     // Unsupported message group ID
                     _ => HandleUnsupportedMessageGroup(messageGroupId)
@@ -232,6 +238,66 @@ namespace Sqs_AI_Lambda.Services
             {
                 _logger.LogError(ex, "Unexpected error creating Transnet message - GroupId: {MessageGroupId}",
                     messageGroupId);
+                return null;
+            }
+        }
+
+        /// <summary>
+        /// Creates SARS tender message from JSON body with null safety.
+        /// </summary>
+        private SarsTenderMessage? CreateSarsTenderMessage(string messageBody, string messageGroupId)
+        {
+            _logger.LogDebug("Deserializing SARS message - GroupId: {MessageGroupId}", messageGroupId);
+            try
+            {
+                var message = JsonSerializer.Deserialize<SarsTenderMessage>(messageBody, _jsonOptions);
+                if (message == null)
+                {
+                    _logger.LogWarning("SARS deserialization returned null - GroupId: {MessageGroupId}", messageGroupId);
+                    return null;
+                }
+                _logger.LogDebug("SARS message deserialized successfully - TenderNumber: {TenderNumber}, Title: {Title}",
+                    message.TenderNumber ?? "Unknown", message.Title ?? "No Title");
+                return message;
+            }
+            catch (JsonException jsonEx)
+            {
+                _logger.LogError(jsonEx, "Failed to deserialize SARS message - GroupId: {MessageGroupId}, Error: {ErrorMessage}", messageGroupId, jsonEx.Message);
+                return null;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Unexpected error creating SARS message - GroupId: {MessageGroupId}", messageGroupId);
+                return null;
+            }
+        }
+
+        /// <summary>
+        /// Creates SANRAL tender message from JSON body with null safety.
+        /// </summary>
+        private SanralTenderMessage? CreateSanralTenderMessage(string messageBody, string messageGroupId)
+        {
+            _logger.LogDebug("Deserializing SANRAL message - GroupId: {MessageGroupId}", messageGroupId);
+            try
+            {
+                var message = JsonSerializer.Deserialize<SanralTenderMessage>(messageBody, _jsonOptions);
+                if (message == null)
+                {
+                    _logger.LogWarning("SANRAL deserialization returned null - GroupId: {MessageGroupId}", messageGroupId);
+                    return null;
+                }
+                _logger.LogDebug("SANRAL message deserialized successfully - TenderNumber: {TenderNumber}, Title: {Title}",
+                    message.TenderNumber ?? "Unknown", message.Title ?? "No Title");
+                return message;
+            }
+            catch (JsonException jsonEx)
+            {
+                _logger.LogError(jsonEx, "Failed to deserialize SANRAL message - GroupId: {MessageGroupId}, Error: {ErrorMessage}", messageGroupId, jsonEx.Message);
+                return null;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Unexpected error creating SANRAL message - GroupId: {MessageGroupId}", messageGroupId);
                 return null;
             }
         }

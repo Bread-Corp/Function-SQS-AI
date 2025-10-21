@@ -70,6 +70,16 @@ namespace Sqs_AI_Lambda.Services
                         await ProcessTransnetTenderMessage(transnetMessage);
                         break;
 
+                    case SarsTenderMessage sarsMessage:
+                        _logger.LogDebug("Routing to SARS processor - TenderNumber: {TenderNumber}", sarsMessage.TenderNumber);
+                        await ProcessSarsTenderMessage(sarsMessage);
+                        break;
+
+                    case SanralTenderMessage sanralMessage:
+                        _logger.LogDebug("Routing to SANRAL processor - TenderNumber: {TenderNumber}", sanralMessage.TenderNumber);
+                        await ProcessSanralTenderMessage(sanralMessage);
+                        break;
+
                     default:
                         // Log unknown message types for monitoring
                         _logger.LogWarning("Unknown message type encountered - Type: {MessageType}, Source: {SourceType}, TenderNumber: {TenderNumber}",
@@ -120,7 +130,7 @@ namespace Sqs_AI_Lambda.Services
             await GenerateAndAttachSummary(message, "eTender");
 
             _logger.LogInformation("eTender processing completed - ID: {TenderId}, Status: {Status}, SummaryGenerated: {HasSummary}",
-                tenderId, status, !string.IsNullOrEmpty(message.Summary));
+                tenderId, status, !string.IsNullOrEmpty(message.AISummary));
 
 
             await Task.CompletedTask;
@@ -161,7 +171,7 @@ namespace Sqs_AI_Lambda.Services
             await GenerateAndAttachSummary(message, "Eskom");
 
             _logger.LogInformation("Eskom processing completed - Number: {TenderNumber}, Source: {Source}, SummaryGenerated: {HasSummary}",
-                tenderNumber, source, !string.IsNullOrEmpty(message.Summary));
+                tenderNumber, source, !string.IsNullOrEmpty(message.AISummary));
 
 
             await Task.CompletedTask;
@@ -212,8 +222,49 @@ namespace Sqs_AI_Lambda.Services
             await GenerateAndAttachSummary(message, "Transnet");
 
             _logger.LogInformation("Transnet processing completed - Number: {TenderNumber}, Institution: {Institution}, Source: {Source}, SummaryGenerated: {HasSummary}",
-                tenderNumber, institution, source, !string.IsNullOrEmpty(message.Summary));
+                tenderNumber, institution, source, !string.IsNullOrEmpty(message.AISummary));
 
+
+            await Task.CompletedTask;
+        }
+
+        /// <summary>
+        /// Processes SARS-specific messages.
+        /// </summary>
+        private async Task ProcessSarsTenderMessage(SarsTenderMessage message)
+        {
+            var tenderNumber = message.TenderNumber ?? "Unknown";
+            var hasBriefing = !string.IsNullOrEmpty(message.BriefingSession);
+
+            _logger.LogInformation("Processing SARS tender - Number: {TenderNumber}, HasBriefingSession: {HasBriefing}",
+                tenderNumber, hasBriefing);
+
+            // Generate AI summary
+            await GenerateAndAttachSummary(message, "SARS");
+
+            _logger.LogInformation("SARS processing completed - Number: {TenderNumber}, SummaryGenerated: {HasSummary}",
+                tenderNumber, !string.IsNullOrEmpty(message.AISummary));
+
+            await Task.CompletedTask;
+        }
+
+        /// <summary>
+        /// Processes SANRAL-specific messages.
+        /// </summary>
+        private async Task ProcessSanralTenderMessage(SanralTenderMessage message)
+        {
+            var tenderNumber = message.TenderNumber ?? "Unknown";
+            var region = message.Region ?? "Unknown";
+            var category = message.Category ?? "Unknown";
+
+            _logger.LogInformation("Processing SANRAL tender - Number: {TenderNumber}, Region: {Region}, Category: {Category}",
+                tenderNumber, region, category);
+
+            // Generate AI summary
+            await GenerateAndAttachSummary(message, "SANRAL");
+
+            _logger.LogInformation("SANRAL processing completed - Number: {TenderNumber}, SummaryGenerated: {HasSummary}",
+                tenderNumber, !string.IsNullOrEmpty(message.AISummary));
 
             await Task.CompletedTask;
         }
@@ -232,7 +283,7 @@ namespace Sqs_AI_Lambda.Services
                     tenderNumber, processingContext);
 
                 var summary = await _bedrockSummaryService.GenerateSummaryAsync(message);
-                message.Summary = summary; // This sets the Summary property on your base class
+                message.AISummary = summary; // This sets the Summary property on your base class
 
                 // Add summary tag to track processing
                 message.Tags.Add("SummaryGenerated");
@@ -251,7 +302,7 @@ namespace Sqs_AI_Lambda.Services
                 message.Tags.Add($"SummaryFailedIn{processingContext}");
 
                 // Set a fall back message indicating failure with context
-                message.Summary = $"Summary generation failed for {processingContext} tender {tenderNumber}. Manual review required.";
+                message.AISummary = $"Summary generation failed for {processingContext} tender {tenderNumber}. Manual review required.";
             }
         }
     }
