@@ -25,7 +25,7 @@ namespace Sqs_AI_Lambda.Services
         private readonly IPromptService _promptService;
 
         // Rate limiting and retry configuration
-        private static readonly SemaphoreSlim _rateLimitSemaphore = new(3, 3); // Max 3 concurrent requests
+        private static readonly SemaphoreSlim _rateLimitSemaphore = new(1, 1); // Limit to 1 concurrent request
         private const int MaxRetryAttempts = 5;
         private const int BaseDelayMs = 1000; // 1 second base delay
 
