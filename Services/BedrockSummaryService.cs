@@ -26,8 +26,8 @@ namespace Sqs_AI_Lambda.Services
 
         // Rate limiting and retry configuration
         private static readonly SemaphoreSlim _rateLimitSemaphore = new(1, 1); // Limit to 1 concurrent request
-        private const int MaxRetryAttempts = 5;
-        private const int BaseDelayMs = 1000; // 1 second base delay
+        private const int MaxRetryAttempts = 6;
+        private const int BaseDelayMs = 1500; // 1,5 second base delay
 
         
         public BedrockSummaryService(ILogger<BedrockSummaryService> logger, AmazonBedrockRuntimeClient bedrockClient, IPromptService promptService)
@@ -200,7 +200,7 @@ namespace Sqs_AI_Lambda.Services
         /// </summary>
         private int CalculateBackoffDelay(int attempt)
         {
-            // Exponential backoff: 1s, 2s, 4s, 8s, 16s
+            // Exponential backoff: ~1.5s, 3s, 6s, 12s, 24s (for 6 attempts)
             var exponentialDelay = BaseDelayMs * Math.Pow(2, attempt - 1);
 
             // Add jitter (±25% randomization) to prevent thundering herd
@@ -285,9 +285,7 @@ namespace Sqs_AI_Lambda.Services
         /// </summary>
         private void AddETenderSpecificFields(Dictionary<string, object> compactTender, ETenderMessage eTender)
         {
-            if (eTender.Id > 0) compactTender["id"] = eTender.Id;
             if (!string.IsNullOrEmpty(eTender.Status)) compactTender["status"] = eTender.Status;
-            if (!string.IsNullOrEmpty(eTender.Url)) compactTender["url"] = eTender.Url;
 
             if (eTender.DatePublished != default)
                 compactTender["published"] = eTender.DatePublished.ToString("yyyy-MM-dd HH:mm");
@@ -440,8 +438,6 @@ namespace Sqs_AI_Lambda.Services
                         summary.AppendLine($"**Status:** {eTender.Status}");
                     if (eTender.DateClosing != default)
                         summary.AppendLine($"**Closing:** {eTender.DateClosing:yyyy-MM-dd HH:mm}");
-                    if (!string.IsNullOrEmpty(eTender.Url))
-                        summary.AppendLine($"**URL:** {eTender.Url}");
                     break;
 
                 case TransnetTenderMessage transnetTender:

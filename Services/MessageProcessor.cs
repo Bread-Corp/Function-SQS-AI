@@ -56,7 +56,7 @@ namespace Sqs_AI_Lambda.Services
                 switch (message)
                 {
                     case ETenderMessage eTenderMessage:
-                        _logger.LogDebug("Routing to eTender processor - ID: {TenderId}", eTenderMessage.Id);
+                        _logger.LogDebug("Routing to eTender processor - ID: {TenderId}", eTenderMessage.TenderNumber);
                         await ProcessETenderMessage(eTenderMessage);
                         break;
 
@@ -105,13 +105,12 @@ namespace Sqs_AI_Lambda.Services
         /// </summary>
         private async Task ProcessETenderMessage(ETenderMessage message)
         {
-            var tenderId = message.Id;
+            var tenderId = message.TenderNumber;
             var status = message.Status ?? "Unknown";
-            var hasUrl = !string.IsNullOrWhiteSpace(message.Url);
             var docCount = message.SupportingDocs?.Count ?? 0;
 
-            _logger.LogInformation("Processing eTender message - ID: {TenderId}, Status: {Status}, HasUrl: {HasUrl}, DocumentCount: {DocumentCount}",
-                tenderId, status, hasUrl, docCount);
+            _logger.LogInformation("Processing eTender message - ID: {TenderId}, Status: {Status}, DocumentCount: {DocumentCount}",
+                tenderId, status, docCount);
 
             // Log date information for tracking
             if (message.DatePublished != default)
