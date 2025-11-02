@@ -70,7 +70,7 @@ jobs:
       
       - name: Lint with .NET Format
         continue-on-error: true
-        run: dotnet format --verify-no-changes --include "**/*.cs"
+        run: dotnet format Sqs_AI_Lambda.sln --verify-no-changes --include "**/*.cs"
         
       # --- TESTING: Uncomment this step when you add a test project ---
       # - name: Test with .NET Test
