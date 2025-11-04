@@ -33,6 +33,7 @@ A production-ready, high-throughput AWS Lambda that processes South African tend
 - [⚡ Performance & Scaling](#-performance--scaling)
 - [🔒 Security](#-security)
 - [🧪 Testing](#-testing)
+- [📦 Deployment](#-deployment)
 - [🧰 Troubleshooting](#-troubleshooting)
 - [🗺️ Roadmap](#️-roadmap)
 
@@ -347,6 +348,471 @@ Prompt security:
 - Parameter Store provides secure configuration management
 - Prompts can be updated without code deployments
 - Version control for prompt changes
+
+---
+
+## 📦 Deployment
+
+This section covers three deployment methods for the AI Lambda Function (Tender Summarization Service). Choose the method that best fits your workflow and infrastructure preferences.
+
+### 🛠️ Prerequisites
+
+Before deploying, ensure you have:
+- AWS CLI configured with appropriate credentials 🔑
+- .NET 8 SDK installed locally
+- AWS SAM CLI installed (for SAM deployment)
+- Access to AWS Lambda, SQS, Bedrock, Parameter Store, and CloudWatch services ☁️
+- Visual Studio 2022 or VS Code with C# extensions (for AWS Toolkit deployment)
+- Claude 3 Sonnet model access in AWS Bedrock
+
+### 🎯 Method 1: AWS Toolkit Deployment
+
+Deploy directly through Visual Studio using the AWS Toolkit extension.
+
+#### Setup Steps:
+1. **Install AWS Toolkit** for Visual Studio 2022
+2. **Configure AWS Profile** with your credentials in Visual Studio
+3. **Open Solution** containing `Sqs_AI_Lambda.csproj`
+
+#### Deploy Process:
+1. **Right-click** the project in Solution Explorer
+2. **Select** "Publish to AWS Lambda" from the context menu
+3. **Configure Lambda Settings**:
+   - Function Name: `AILambda`
+   - Runtime: `.NET 8`
+   - Handler: `Sqs_AI_Lambda::Sqs_AI_Lambda.Function::FunctionHandler`
+   - Memory: `512 MB`
+   - Timeout: `900 seconds` (15 minutes)
+4. **Set Environment Variables**:
+   ```
+   FAILED_QUEUE_URL=https://sqs.{region}.amazonaws.com/{account-id}/FailedQueue.fifo
+   SOURCE_QUEUE_URL=https://sqs.{region}.amazonaws.com/{account-id}/AIQueue.fifo
+   TAG_QUEUE_URL=https://sqs.{region}.amazonaws.com/{account-id}/TagQueue.fifo
+   ```
+5. **Configure IAM Role** with required permissions:
+   - SQS: `ReceiveMessage`, `DeleteMessage`, `GetQueueAttributes`, `SendMessage`
+   - Bedrock: `bedrock:InvokeModel` for Claude 3 Sonnet
+   - Parameter Store: `ssm:GetParameter` on `/TenderSummary/Prompts/*`
+   - CloudWatch Logs: Standard logging permissions
+6. **Set up SQS Trigger** manually after deployment
+
+#### Parameter Store Setup:
+Create these parameters before deployment:
+```bash
+# System prompt for Claude 3 Sonnet
+aws ssm put-parameter \
+    --name "/TenderSummary/Prompts/System" \
+    --value "You are an AI assistant specialized in analyzing South African tender documents..." \
+    --type "String"
+
+# Source-specific prompts
+aws ssm put-parameter \
+    --name "/TenderSummary/Prompts/eTenders" \
+    --value "Focus on government procurement requirements..." \
+    --type "String"
+
+aws ssm put-parameter \
+    --name "/TenderSummary/Prompts/Eskom" \
+    --value "Emphasize power generation and electrical infrastructure..." \
+    --type "String"
+
+aws ssm put-parameter \
+    --name "/TenderSummary/Prompts/Transnet" \
+    --value "Highlight logistics and transportation aspects..." \
+    --type "String"
+
+aws ssm put-parameter \
+    --name "/TenderSummary/Prompts/SARS" \
+    --value "Focus on tax administration and revenue services..." \
+    --type "String"
+
+aws ssm put-parameter \
+    --name "/TenderSummary/Prompts/SANRAL" \
+    --value "Emphasize road infrastructure and highway projects..." \
+    --type "String"
+```
+
+#### Post-Deployment:
+- Test the function using the AWS Toolkit test feature
+- Monitor logs through CloudWatch integration
+- Verify Bedrock integration and prompt retrieval
+- Test SQS message processing
+
+### 🚀 Method 2: SAM Deployment
+
+Use AWS SAM for infrastructure-as-code deployment with the provided template.
+
+#### Initial Setup:
+```bash
+# Install AWS SAM CLI
+pip install aws-sam-cli
+
+# Install .NET 8 SDK
+# Download from https://dotnet.microsoft.com/download/dotnet/8.0
+
+# Verify installations
+sam --version
+dotnet --version
+```
+
+#### Build and Deploy:
+```bash
+# Build the .NET 8 application
+dotnet build -c Release
+
+# Build the SAM application
+sam build
+
+# Deploy with guided configuration (first time)
+sam deploy --guided
+
+# Follow the prompts:
+# Stack Name: ai-lambda-stack
+# AWS Region: us-east-1 (or your preferred region)
+# Parameter FailedQueueURL: https://sqs.{region}.amazonaws.com/{account-id}/FailedQueue.fifo
+# Parameter SourceQueueURL: https://sqs.{region}.amazonaws.com/{account-id}/AIQueue.fifo
+# Parameter TagQueueURL: https://sqs.{region}.amazonaws.com/{account-id}/TagQueue.fifo
+# Confirm changes before deploy: Y
+# Allow SAM to create IAM roles: Y
+# Save parameters to samconfig.toml: Y
+```
+
+#### Environment Variables Setup:
+The template already includes the required environment variables:
+
+```yaml
+# Already configured in AILambda.yaml
+Environment:
+  Variables:
+    FAILED_QUEUE_URL: https://sqs.us-east-1.amazonaws.com/{account-id}/FailedQueue.fifo
+    SOURCE_QUEUE_URL: https://sqs.us-east-1.amazonaws.com/{account-id}/AIQueue.fifo
+    TAG_QUEUE_URL: https://sqs.us-east-1.amazonaws.com/{account-id}/TagQueue.fifo
+```
+
+#### Pre-Deployment Parameter Store Setup:
+```bash
+# Create all required prompts before deploying
+./scripts/setup-parameters.sh  # Create this script with parameter creation commands
+```
+
+#### Subsequent Deployments:
+```bash
+# Quick deployment after initial setup
+dotnet build -c Release
+sam build && sam deploy
+```
+
+#### Local Testing with SAM:
+```bash
+# Test function locally (requires Docker)
+sam local invoke AILambda
+
+# Start local SQS simulation
+sam local start-api
+```
+
+#### SAM Deployment Advantages:
+- ✅ Complete infrastructure management including SQS queues
+- ✅ Environment variables defined in template
+- ✅ IAM permissions automatically configured for Bedrock and Parameter Store
+- ✅ Easy rollback capabilities
+- ✅ CloudFormation integration
+- ✅ SQS trigger automatically configured
+
+### 🔄 Method 3: Workflow Deployment (CI/CD)
+
+Automated deployment using GitHub Actions workflow for production environments.
+
+#### Setup Requirements:
+1. **GitHub Repository Secrets**:
+   ```
+   AWS_ACCESS_KEY_ID: Your AWS access key
+   AWS_SECRET_ACCESS_KEY: Your AWS secret key
+   AWS_REGION: us-east-1 (or your target region)
+   ```
+
+2. **Pre-existing Lambda Function**: The workflow updates an existing function, so deploy initially using Method 1 or 2.
+
+3. **Parameter Store Setup**: Ensure all prompts are configured in Parameter Store.
+
+#### Deployment Process:
+1. **Create Release Branch**:
+   ```bash
+   # Create and switch to release branch
+   git checkout -b release
+   
+   # Make your changes to the .NET code
+   # Commit changes
+   git add .
+   git commit -m "feat: update AI prompt processing logic"
+   
+   # Push to trigger deployment
+   git push origin release
+   ```
+
+2. **Automatic Deployment**: The workflow will:
+   - Checkout the code
+   - Set up .NET 8 SDK
+   - Install AWS Lambda Tools
+   - Build and package the Lambda function using `Sqs_AI_Lambda.csproj`
+   - Configure AWS credentials
+   - Update the existing Lambda function code
+   - Maintain existing configuration (environment variables, triggers, etc.)
+
+#### Manual Trigger:
+You can also trigger deployment manually:
+1. Go to **Actions** tab in your GitHub repository
+2. Select **"Deploy .NET Lambda to AWS"** workflow
+3. Click **"Run workflow"**
+4. Choose the `release` branch
+5. Click **"Run workflow"** button
+
+#### Workflow Deployment Advantages:
+- ✅ Automated CI/CD pipeline
+- ✅ Consistent deployment process
+- ✅ Audit trail of deployments
+- ✅ Easy rollback to previous commits
+- ✅ No local environment dependencies
+- ✅ Automatic .NET build and packaging
+
+### 🔧 Post-Deployment Configuration
+
+Regardless of deployment method, verify the following:
+
+#### Environment Variables Verification:
+Ensure these environment variables are properly set:
+
+```bash
+# Verify environment variables via AWS CLI
+aws lambda get-function-configuration \
+    --function-name AILambda \
+    --query 'Environment.Variables'
+```
+
+Expected output:
+```json
+{
+    "FAILED_QUEUE_URL": "https://sqs.us-east-1.amazonaws.com/{account-id}/FailedQueue.fifo",
+    "SOURCE_QUEUE_URL": "https://sqs.us-east-1.amazonaws.com/{account-id}/AIQueue.fifo",
+    "TAG_QUEUE_URL": "https://sqs.us-east-1.amazonaws.com/{account-id}/TagQueue.fifo"
+}
+```
+
+#### Parameter Store Verification:
+Verify all required prompts exist:
+
+```bash
+# Check system prompt
+aws ssm get-parameter --name "/TenderSummary/Prompts/System"
+
+# Check source-specific prompts
+aws ssm get-parameter --name "/TenderSummary/Prompts/eTenders"
+aws ssm get-parameter --name "/TenderSummary/Prompts/Eskom"
+aws ssm get-parameter --name "/TenderSummary/Prompts/Transnet"
+aws ssm get-parameter --name "/TenderSummary/Prompts/SARS"
+aws ssm get-parameter --name "/TenderSummary/Prompts/SANRAL"
+```
+
+#### Bedrock Model Access:
+Verify Claude 3 Sonnet access:
+
+```bash
+# List available foundation models
+aws bedrock list-foundation-models --region us-east-1
+
+# Test model access (if needed)
+aws bedrock invoke-model \
+    --model-id anthropic.claude-3-sonnet-20240229-v1:0 \
+    --body '{"messages":[{"role":"user","content":"Test"}],"max_tokens":100}' \
+    --cli-binary-format raw-in-base64-out \
+    response.json
+```
+
+#### SQS Trigger Configuration:
+Ensure the SQS trigger is properly configured:
+
+```bash
+# List event source mappings
+aws lambda list-event-source-mappings \
+    --function-name AILambda
+
+# Verify batch size and queue configuration
+aws lambda get-event-source-mapping \
+    --uuid [event-source-mapping-uuid]
+```
+
+### 🧪 Testing Your Deployment
+
+After deployment, test the function thoroughly:
+
+#### Test AI Processing:
+```bash
+# Send test message to source queue
+aws sqs send-message \
+    --queue-url https://sqs.us-east-1.amazonaws.com/{account-id}/AIQueue.fifo \
+    --message-body '{
+        "title": "Test Tender for Infrastructure Development",
+        "description": "This is a test tender for AI processing",
+        "tenderNumber": "TEST-001",
+        "source": "eTenders"
+    }' \
+    --message-group-id "etenderscrape" \
+    --message-deduplication-id "test-$(date +%s)"
+
+# Monitor function execution
+aws logs tail /aws/lambda/AILambda --follow
+```
+
+#### Test Parameter Store Integration:
+```bash
+# Invoke function to test prompt retrieval
+aws lambda invoke \
+    --function-name AILambda \
+    --payload '{"Records":[]}' \
+    response.json
+
+# Check response for prompt loading logs
+cat response.json
+```
+
+#### Expected Success Indicators:
+- ✅ Function executes without errors
+- ✅ CloudWatch logs show successful prompt retrieval from Parameter Store
+- ✅ Bedrock integration working (AI summaries generated)
+- ✅ Messages properly routed to TagQueue with AI summaries
+- ✅ No timeout or memory errors
+- ✅ Proper error handling for failed messages
+- ✅ SQS batch processing functioning correctly
+
+### 🔍 Monitoring and Maintenance
+
+#### CloudWatch Metrics to Monitor:
+- **Duration**: Function execution time for AI processing
+- **Error Rate**: Failed AI generation operations
+- **Memory Utilization**: RAM usage during Bedrock calls
+- **SQS Metrics**: Message processing rates and queue depths
+- **Bedrock Metrics**: Model invocation success rates and latencies
+- **Parameter Store**: GetParameter API call rates
+
+#### Log Analysis:
+```bash
+# View recent logs
+aws logs tail /aws/lambda/AILambda --follow
+
+# Search for AI processing statistics
+aws logs filter-log-events \
+    --log-group-name /aws/lambda/AILambda \
+    --filter-pattern "AI-Enhanced"
+
+# Search for prompt loading issues
+aws logs filter-log-events \
+    --log-group-name /aws/lambda/AILambda \
+    --filter-pattern "Prompt loading"
+
+# Monitor Bedrock integration
+aws logs filter-log-events \
+    --log-group-name /aws/lambda/AILambda \
+    --filter-pattern "Bedrock"
+```
+
+### 🚨 Troubleshooting Deployments
+
+<details>
+<summary><strong>.NET 8 Runtime Issues</strong></summary>
+
+**Issue**: Function fails to start or throws runtime errors
+
+**Solution**: Ensure proper .NET 8 configuration:
+- Verify the handler path: `Sqs_AI_Lambda::Sqs_AI_Lambda.Function::FunctionHandler`
+- Check that all NuGet packages are compatible with .NET 8
+- Ensure the project targets `net8.0` framework
+- Verify all dependencies are included in the deployment package
+</details>
+
+<details>
+<summary><strong>Bedrock Access Issues</strong></summary>
+
+**Issue**: Cannot access Claude 3 Sonnet model
+
+**Solution**: Verify Bedrock configuration:
+- Ensure the IAM role has `bedrock:InvokeModel` permissions
+- Check that Claude 3 Sonnet is available in your region
+- Verify model ARN: `anthropic.claude-3-sonnet-20240229-v1:0`
+- Test model access using AWS CLI
+- Check Bedrock service quotas and limits
+</details>
+
+<details>
+<summary><strong>Parameter Store Access Failures</strong></summary>
+
+**Issue**: Cannot retrieve prompts from Parameter Store
+
+**Solution**: Debug Parameter Store configuration:
+- Verify IAM role has `ssm:GetParameter` permissions on `/TenderSummary/Prompts/*`
+- Check that all required parameters exist
+- Test parameter retrieval using AWS CLI
+- Ensure parameter names match exactly (case-sensitive)
+- Verify parameter type is "String"
+</details>
+
+<details>
+<summary><strong>SQS Message Processing Issues</strong></summary>
+
+**Issue**: Messages not being processed or routed incorrectly
+
+**Solution**: Debug SQS configuration:
+- Verify SQS trigger is configured with correct batch size (10)
+- Check message format matches expected JSON structure
+- Ensure FIFO queue attributes are properly set
+- Verify MessageGroupId routing logic
+- Monitor dead letter queue for failed messages
+</details>
+
+<details>
+<summary><strong>Memory and Performance Issues</strong></summary>
+
+**Issue**: Function runs out of memory or times out
+
+**Solution**: Optimize function performance:
+- Increase memory allocation (current: 512 MB)
+- Optimize AI processing batch size
+- Review Bedrock API call patterns
+- Monitor prompt caching effectiveness
+- Consider implementing connection pooling
+</details>
+
+<details>
+<summary><strong>Environment Variables Missing</strong></summary>
+
+**Issue**: Function cannot access required queue URLs
+
+**Solution**: Set environment variables using AWS CLI:
+```bash
+aws lambda update-function-configuration \
+    --function-name AILambda \
+    --environment Variables='{
+        "FAILED_QUEUE_URL":"https://sqs.{region}.amazonaws.com/{account-id}/FailedQueue.fifo",
+        "SOURCE_QUEUE_URL":"https://sqs.{region}.amazonaws.com/{account-id}/AIQueue.fifo",
+        "TAG_QUEUE_URL":"https://sqs.{region}.amazonaws.com/{account-id}/TagQueue.fifo"
+    }'
+```
+</details>
+
+<details>
+<summary><strong>Workflow Deployment Fails</strong></summary>
+
+**Issue**: GitHub Actions workflow errors
+
+**Solution**: 
+- Check repository secrets are correctly configured
+- Verify .NET 8 SDK is properly installed in workflow
+- Ensure AWS Lambda Tools installation succeeds
+- Check that `Sqs_AI_Lambda.csproj` exists in repository
+- Verify target Lambda function exists in AWS
+- Monitor workflow logs for specific error messages
+</details>
+
+Choose the deployment method that best fits your development workflow and infrastructure requirements. SAM deployment is recommended for development environments, while workflow deployment excels for production systems requiring automated CI/CD pipelines with AI model integration.
 
 ---
 
